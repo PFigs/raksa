@@ -25,6 +25,10 @@ packages = ["src/raksa"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "submit: tests that write to the live API (run with: pytest -m submit)",
+]
+addopts = "-m 'not submit'"
 
 [dependency-groups]
 dev = [

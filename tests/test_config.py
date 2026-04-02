@@ -22,6 +22,7 @@ def test_resolve_token_from_dotenv(tmp_path, monkeypatch):
 
 def test_resolve_token_from_config_file(tmp_path, monkeypatch):
     monkeypatch.delenv("RAKSA_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)  # avoid picking up project .env
     config_dir = tmp_path / ".config" / "raksa"
     config_dir.mkdir(parents=True)
     token_file = config_dir / "token.json"
