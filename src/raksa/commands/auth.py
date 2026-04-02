@@ -1,4 +1,4 @@
-import json
+import os
 
 import typer
 
@@ -7,28 +7,40 @@ from raksa.config import save_token
 app = typer.Typer(help="Authentication management", no_args_is_help=True)
 
 
+def _update_env_file(token: str) -> None:
+    env_path = ".env"
+    line = f"RAKSA_TOKEN={token}\n"
+
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+        updated = False
+        for i, existing in enumerate(lines):
+            if existing.startswith("RAKSA_TOKEN="):
+                lines[i] = line
+                updated = True
+                break
+        if not updated:
+            lines.append(line)
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+    else:
+        with open(env_path, "w") as f:
+            f.write(line)
+
+
 @app.command()
 def setup():
-    """Set up EstateApp authentication credentials."""
-    typer.echo("To get your token, open app.estateapp.com in your browser,")
-    typer.echo("open DevTools (F12), go to Console, and run:\n")
-    typer.echo('  JSON.stringify({')
-    typer.echo('    loginToken: localStorage.getItem("Meteor.loginToken"),')
-    typer.echo('    userId: localStorage.getItem("Meteor.userId")')
-    typer.echo('  })\n')
+    """Set up EstateApp authentication credentials via browser."""
+    from raksa.auth_server import run_auth_server
 
-    raw = typer.prompt("Paste the JSON output here")
-    try:
-        data = json.loads(raw.strip().strip("'\""))
-    except json.JSONDecodeError:
-        typer.echo("Error: invalid JSON. Please try again.", err=True)
+    typer.echo("Opening browser for authentication setup...")
+    result = run_auth_server()
+    if result:
+        login_token, user_id = result
+        path = save_token(login_token, user_id)
+        _update_env_file(login_token)
+        typer.echo(f"Token saved to {path} and .env")
+    else:
+        typer.echo("Setup cancelled.", err=True)
         raise typer.Exit(1)
-
-    login_token = data.get("loginToken")
-    user_id = data.get("userId")
-    if not login_token or not user_id:
-        typer.echo("Error: JSON must contain 'loginToken' and 'userId' keys.", err=True)
-        raise typer.Exit(1)
-
-    path = save_token(login_token, user_id)
-    typer.echo(f"Token saved to {path}")
