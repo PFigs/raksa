@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from raksa.config import resolve_token, resolve_condo_id, RaksaConfigError
+from raksa.config import resolve_token, resolve_condo_id, RaksaConfigError, save_token, resolve_base_url
 
 
 def test_resolve_token_from_env(monkeypatch):
@@ -47,3 +47,24 @@ def test_resolve_condo_id_returns_none_when_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("RAKSA_CONDO_ID", raising=False)
     monkeypatch.chdir(tmp_path)
     assert resolve_condo_id() is None
+
+
+def test_save_token(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".config" / "raksa"
+    monkeypatch.setattr("raksa.config.CONFIG_DIR", config_dir)
+    path = save_token("my_token", "my_user")
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data["loginToken"] == "my_token"
+    assert data["userId"] == "my_user"
+
+
+def test_resolve_base_url_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("RAKSA_BASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert resolve_base_url() == "https://app.estateapp.com"
+
+
+def test_resolve_base_url_from_env(monkeypatch):
+    monkeypatch.setenv("RAKSA_BASE_URL", "https://custom.example.com")
+    assert resolve_base_url() == "https://custom.example.com"
