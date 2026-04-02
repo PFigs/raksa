@@ -2,8 +2,33 @@ from pathlib import Path
 
 import pytest
 
+from raksa.config import resolve_token, resolve_base_url, RaksaConfigError
+from raksa.client import EstateAppClient
+
 
 PREMIS_CASES_DIR = Path("/home/silva/home projects/premis/cases")
+CONDO_ID = "example-condo-id"
+KNOWN_GIG_ID = "example-gig-id"
+
+
+@pytest.fixture(scope="session")
+def live_client():
+    """Client connected to the real EstateApp API. Skips if no token configured."""
+    try:
+        token = resolve_token()
+    except RaksaConfigError:
+        pytest.skip("No RAKSA_TOKEN configured -- skipping live API tests")
+    return EstateAppClient(token=token, base_url=resolve_base_url())
+
+
+@pytest.fixture
+def condo_id():
+    return CONDO_ID
+
+
+@pytest.fixture
+def known_gig_id():
+    return KNOWN_GIG_ID
 
 
 @pytest.fixture

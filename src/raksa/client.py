@@ -162,8 +162,8 @@ mutation createShareholderRenovationGig(
 """
 
 LIST_FAULTS_QUERY = """
-query faultNotificationsOfCodominiums($condominiumIds: [ID!]!) {
-  faultNotificationsOfCodominiums(condominiumIds: $condominiumIds) {
+query faultNotificationsOfCodominiums($condominiumId: ID!) {
+  faultNotificationsOfCodominiums(condominiumId: $condominiumId) {
     _id
     condominiumId
     createdAt
@@ -275,7 +275,7 @@ class EstateAppClient:
         return data["createShareholderRenovationGig"]
 
     def list_faults(self, condo_id: str) -> list[FaultNotification]:
-        data = self._gql(LIST_FAULTS_QUERY, {"condominiumIds": [condo_id]})
+        data = self._gql(LIST_FAULTS_QUERY, {"condominiumId": condo_id})
         items = data["faultNotificationsOfCodominiums"]
         return [FaultNotification.model_validate(_normalize(item)) for item in items]
 
