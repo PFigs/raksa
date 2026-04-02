@@ -1,3 +1,9 @@
+import datetime
+import re
+import uuid
+
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -128,3 +134,193 @@ class FaultNotification(BaseModel):
     contact_name: str | None = None
     additional_information: str | None = None
     completed_at: str | None = None
+
+
+RENOVATION_TYPE_MAP: dict[str, str] = {
+    "Ilmalämpöpumpun asennus": "heatPumpInstallation",
+    "Keittiöremontti": "kitchenRenovation",
+    "Lattiamateriaalin vaihtaminen": "floorSurfaces",
+    "Parveke- tai terassilasitus": "balconyGlazingInstallation",
+    "Parvekelasitus": "balconyGlazingInstallation",
+}
+
+
+class YAMLEntityRef(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(alias="Id")
+    logical_name: str = Field(alias="LogicalName")
+    name: str = Field(alias="Name")
+
+
+class YAMLLabelValue(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(alias="Label")
+    value: int = Field(alias="Value")
+
+
+class YAMLTypeLabelValue(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(alias="Label")
+    value: int = Field(alias="Value")
+
+
+class YAMLExecutorType(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(alias="Label")
+    value: int = Field(alias="Value")
+
+
+class YAMLRenovationType(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(alias="Id")
+    organization_name: str | None = Field(default=None, alias="OrganizationName")
+    business_id: str | None = Field(default=None, alias="BusinessId")
+    description: str | None = Field(default=None, alias="Description")
+    type: YAMLTypeLabelValue | None = Field(default=None, alias="Type")
+    executor_type: YAMLExecutorType | None = Field(default=None, alias="ExecutorType")
+    email: str | None = Field(default=None, alias="Email")
+    mobile_phone: str | None = Field(default=None, alias="MobilePhone")
+    first_name: str | None = Field(default=None, alias="FirstName")
+    last_name: str | None = Field(default=None, alias="LastName")
+    full_name: str | None = Field(default=None, alias="FullName")
+    birthday: str | None = Field(default=None, alias="Birthday")
+    foreign_registration_number: str | None = Field(default=None, alias="ForeignRegistrationNumber")
+
+
+class YAMLCase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    title: str = Field(alias="Title")
+    created_on: str = Field(alias="CreatedOn")
+    modified_on: str | None = Field(default=None, alias="ModifiedOn")
+    description: str | None = Field(default=None, alias="Description")
+    public_description: str | None = Field(default=None, alias="PublicDescription")
+    contact_person: YAMLEntityRef | None = Field(default=None, alias="ContactPerson")
+    space: YAMLEntityRef | None = Field(default=None, alias="Space")
+    building_address: str | None = Field(default=None, alias="BuildingAddress")
+    building: YAMLEntityRef | None = Field(default=None, alias="Building")
+    cooperative: YAMLEntityRef | None = Field(default=None, alias="Cooperative")
+    renovation_types: list[YAMLRenovationType] | None = Field(default=None, alias="RenovationTypes")
+    estimated_timing: str | None = Field(default=None, alias="EstimatedTiming")
+    state: YAMLLabelValue | None = Field(default=None, alias="State")
+    status: YAMLLabelValue | None = Field(default=None, alias="Status")
+    project_status: YAMLLabelValue | None = Field(default=None, alias="ProjectStatus")
+    request_type: YAMLLabelValue | None = Field(default=None, alias="RequestType")
+    case_level1: YAMLLabelValue | None = Field(default=None, alias="CaseLevel1")
+    case_level2: YAMLLabelValue | None = Field(default=None, alias="CaseLevel2")
+    case_level3: YAMLLabelValue | None = Field(default=None, alias="CaseLevel3")
+    has_files: bool = Field(default=False, alias="HasFiles")
+    id: str = Field(alias="Id")
+    conclusion_date: str | None = Field(default=None, alias="ConclusionDate")
+    resolution_description: str | None = Field(default=None, alias="ResolutionDescription")
+    priority: YAMLLabelValue | None = Field(default=None, alias="Priority")
+    supervisor: Any = Field(default=None, alias="Supervisor")
+    description_of_terms: str | None = Field(default=None, alias="DescriptionOfTerms")
+
+    @property
+    def is_renovation(self) -> bool:
+        return self.request_type is not None and self.request_type.label == "Huoneistomuutosilmoitus"
+
+    def _parse_estimated_timing(self) -> tuple[str | None, str | None]:
+        if not self.estimated_timing:
+            return None, None
+        match = re.match(r"(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})", self.estimated_timing)
+        if not match:
+            return None, None
+        start_str, end_str = match.group(1), match.group(2)
+        start_dt = datetime.datetime.strptime(start_str, "%d.%m.%Y")
+        end_dt = datetime.datetime.strptime(end_str, "%d.%m.%Y")
+        start_epoch_ms = str(int(start_dt.timestamp() * 1000))
+        end_epoch_ms = str(int(end_dt.timestamp() * 1000))
+        return start_epoch_ms, end_epoch_ms
+
+    def _map_chosen_jobs(self) -> dict[str, bool]:
+        jobs: dict[str, bool] = {}
+        if not self.renovation_types:
+            return jobs
+        for rt in self.renovation_types:
+            label = rt.type.label if rt.type else None
+            field_name = RENOVATION_TYPE_MAP.get(label, "otherChanges") if label else "otherChanges"
+            jobs[field_name] = True
+        return jobs
+
+    def _job_summary(self) -> str:
+        if not self.renovation_types:
+            return "Muutostyö"
+        labels = [rt.type.label for rt in self.renovation_types if rt.type]
+        if not labels:
+            return "Muutostyö"
+        return ", ".join(labels)
+
+    def to_renovation_input(self, condo_id: str) -> dict:
+        start_date, end_date = self._parse_estimated_timing()
+        chosen_jobs = self._map_chosen_jobs()
+        space_name = self.space.name if self.space else ""
+        apartment_address = " ".join(filter(None, [self.building_address, space_name]))
+        informant: dict | None = None
+        if self.contact_person:
+            informant = {
+                "_id": str(uuid.uuid4()),
+                "name": self.contact_person.name,
+                "phone": None,
+                "email": None,
+            }
+        contractors = []
+        for rt in (self.renovation_types or []):
+            contact: dict | None = None
+            if rt.first_name or rt.last_name or rt.email or rt.mobile_phone:
+                contact = {
+                    "_id": str(uuid.uuid4()),
+                    "name": " ".join(filter(None, [rt.first_name, rt.last_name])) or None,
+                    "phone": rt.mobile_phone,
+                    "email": rt.email,
+                }
+            contractors.append({
+                "id": str(uuid.uuid4()),
+                "companyName": rt.organization_name,
+                "companyBusinessId": rt.business_id,
+                "contact": contact,
+            })
+        job_title = self._job_summary()
+        if space_name:
+            job_title = f"{job_title} {space_name}"
+        collateral = {
+            "authorized_to_submit_renovation_work": True,
+            "understand_contractor_liability": True,
+            "info_provided_is_accurate": True,
+            "accept_modification_terms": True,
+            "aware_of_processing_after_payment": True,
+        }
+        return {
+            "condominiumId": condo_id,
+            "type": "shareholderRenovationWork",
+            "status": "UPCOMING",
+            "startDate": start_date,
+            "endDate": end_date,
+            "title": job_title,
+            "shareholderRenovationWork": {
+                "apartmentAddress": apartment_address,
+                "informant": informant,
+                "informantIsApartmentOwner": True,
+                "workDescription": self.public_description,
+                "contractors": contractors,
+                "chosenJobs": chosen_jobs,
+                "collateral": collateral,
+            },
+        }
+
+    def to_fault_input(self) -> dict:
+        contact_name = self.contact_person.name if self.contact_person else None
+        space_name = self.space.name if self.space else None
+        return {
+            "faultDescription": self.description,
+            "space": space_name,
+            "apartment": space_name,
+            "streetAddress": self.building_address,
+            "contactName": contact_name,
+        }

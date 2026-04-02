@@ -54,3 +54,14 @@ def test_load_renovation_cases_from_hive(tmp_path):
     assert len(cases) == 1
     assert cases[0].title == "12345"
     assert cases[0].is_renovation is True
+
+
+def test_load_real_renovation_cases(premis_repair_dir):
+    cases = load_renovation_cases(premis_repair_dir)
+    assert len(cases) >= 30  # we know there are 36
+    for case in cases:
+        assert case.is_renovation
+        renovation = case.to_renovation_input(condo_id="test_condo")
+        assert renovation["condominiumId"] == "test_condo"
+        assert renovation["type"] == "shareholderRenovationWork"
+        assert renovation["shareholderRenovationWork"]["apartmentAddress"]
