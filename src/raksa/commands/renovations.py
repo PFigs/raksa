@@ -31,7 +31,7 @@ def _get_condo_id(condo_id: str | None) -> str:
     return resolved
 
 
-def load_renovation_cases(yaml_dir: Path) -> list[YAMLCase]:
+def load_renovation_cases(yaml_dir: Path) -> list[tuple[YAMLCase, Path]]:
     cases = []
     for path in yaml_dir.rglob("*.yaml"):
         if path.stem.endswith("_chat"):
@@ -41,7 +41,7 @@ def load_renovation_cases(yaml_dir: Path) -> list[YAMLCase]:
             continue
         case = YAMLCase.model_validate(raw)
         if case.is_renovation:
-            cases.append(case)
+            cases.append((case, path))
     return cases
 
 
@@ -104,15 +104,15 @@ def import_renovations(
 ):
     """Import renovation cases from YAML files into EstateApp."""
     resolved_condo_id = _get_condo_id(condo_id)
-    cases = load_renovation_cases(yaml_dir)
+    entries = load_renovation_cases(yaml_dir)
 
-    if not cases:
+    if not entries:
         typer.echo("No renovation cases found.")
         return
 
-    typer.echo(f"Found {len(cases)} renovation case(s):")
-    for case in cases:
-        typer.echo(f"  {case.title}")
+    typer.echo(f"Found {len(entries)} renovation case(s):")
+    for case, path in entries:
+        typer.echo(f"  {case.title}  {path.name}")
 
     if not submit:
         typer.echo("\nDry-run mode. Pass --submit to actually import.")
@@ -120,13 +120,27 @@ def import_renovations(
 
     client = _get_client()
     success = 0
-    for case in cases:
-        gig_input = case.to_renovation_input(resolved_condo_id)
+    for case, path in entries:
         try:
-            gig_id = client.create_renovation(gig_input)
-            typer.echo(f"  Created: {gig_id} ({case.title})")
-            success += 1
-        except EstateAppError as e:
-            typer.echo(f"  Failed {case.title}: {e}", err=True)
+            gig_input = case.to_renovation_input(resolved_condo_id)
+            client.create_renovation(gig_input)
 
-    typer.echo(f"\nImported {success}/{len(cases)} renovation case(s).")
+            # Find the created gig by listing and matching title
+            renovations = client.list_renovations(resolved_condo_id)
+            gig_id = None
+            for r in renovations:
+                if r.title == gig_input.get("title"):
+                    gig_id = r.id
+                    break
+
+            if gig_id:
+                client.approve_renovation(gig_id)
+                client.upload_file(path, resolved_condo_id, "shareholderRenovation")
+                typer.echo(f"  OK  [{case.title}] -> {gig_id} (approved, file uploaded)")
+            else:
+                typer.echo(f"  OK  [{case.title}] -> created (could not find ID for approval/upload)")
+            success += 1
+        except (EstateAppError, Exception) as e:
+            typer.echo(f"  FAIL [{case.title}]: {e}", err=True)
+
+    typer.echo(f"\nImported {success}/{len(entries)} renovation case(s).")

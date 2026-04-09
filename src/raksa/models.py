@@ -246,6 +246,7 @@ class YAMLCase(BaseModel):
         return self.request_type is not None and self.request_type.label == "Huoneistomuutosilmoitus"
 
     def _parse_estimated_timing(self) -> tuple[str | None, str | None]:
+        """Parse 'DD.MM.YYYY - DD.MM.YYYY' into ISO 8601 strings."""
         if not self.estimated_timing:
             return None, None
         match = re.match(r"(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})", self.estimated_timing)
@@ -254,9 +255,7 @@ class YAMLCase(BaseModel):
         start_str, end_str = match.group(1), match.group(2)
         start_dt = datetime.datetime.strptime(start_str, "%d.%m.%Y")
         end_dt = datetime.datetime.strptime(end_str, "%d.%m.%Y")
-        start_epoch_ms = str(int(start_dt.timestamp() * 1000))
-        end_epoch_ms = str(int(end_dt.timestamp() * 1000))
-        return start_epoch_ms, end_epoch_ms
+        return start_dt.strftime("%Y-%m-%dT00:00:00.000Z"), end_dt.strftime("%Y-%m-%dT00:00:00.000Z")
 
     def _map_chosen_jobs(self) -> dict[str, bool]:
         jobs: dict[str, bool] = {}
@@ -276,6 +275,33 @@ class YAMLCase(BaseModel):
             return "Muutostyö"
         return ", ".join(labels)
 
+    def _build_work_performer(self) -> dict | None:
+        if not self.renovation_types:
+            return None
+        has_contractor = any(rt.organization_name for rt in self.renovation_types)
+        has_self = any(
+            rt.executor_type and rt.executor_type.label != "Suomalainen yritys"
+            for rt in self.renovation_types
+        )
+        if has_contractor and has_self:
+            performer = "both"
+        elif has_contractor:
+            performer = "contractor"
+        else:
+            performer = "itself"
+
+        contractor_steps = ", ".join(
+            rt.description or rt.type.label
+            for rt in self.renovation_types
+            if rt.organization_name and (rt.description or rt.type)
+        ) or None
+        return {
+            "_id": str(uuid.uuid4()),
+            "performer": performer,
+            "contractorWorkingSteps": contractor_steps,
+            "itselfWorkingSteps": None,
+        }
+
     def to_renovation_input(self, condo_id: str) -> dict:
         start_date, end_date = self._parse_estimated_timing()
         chosen_jobs = self._map_chosen_jobs()
@@ -290,31 +316,21 @@ class YAMLCase(BaseModel):
                 "email": None,
             }
         contractors = []
-        for rt in (self.renovation_types or []):
-            contact: dict | None = None
-            if rt.first_name or rt.last_name or rt.email or rt.mobile_phone:
-                contact = {
-                    "_id": str(uuid.uuid4()),
-                    "name": " ".join(filter(None, [rt.first_name, rt.last_name])) or None,
-                    "phone": rt.mobile_phone,
-                    "email": rt.email,
-                }
+        for rt in self.renovation_types or []:
             contractors.append({
-                "id": str(uuid.uuid4()),
+                "_id": str(uuid.uuid4()),
                 "companyName": rt.organization_name,
                 "companyBusinessId": rt.business_id,
-                "contact": contact,
+                "contact": {
+                    "_id": str(uuid.uuid4()),
+                    "name": rt.organization_name,
+                    "phone": rt.mobile_phone,
+                    "email": rt.email,
+                },
             })
         job_title = self._job_summary()
         if space_name:
-            job_title = f"{job_title} {space_name}"
-        collateral = {
-            "authorized_to_submit_renovation_work": True,
-            "understand_contractor_liability": True,
-            "info_provided_is_accurate": True,
-            "accept_modification_terms": True,
-            "aware_of_processing_after_payment": True,
-        }
+            job_title = f"{job_title}, {space_name}"
         return {
             "condominiumId": condo_id,
             "type": "shareholderRenovationWork",
@@ -327,9 +343,17 @@ class YAMLCase(BaseModel):
                 "informant": informant,
                 "informantIsApartmentOwner": True,
                 "workDescription": self.public_description,
+                "renovationRequiresFireWork": False,
                 "contractors": contractors,
+                "workPerfromer": self._build_work_performer(),
                 "chosenJobs": chosen_jobs,
-                "collateral": collateral,
+                "collateral": {
+                    "authorizedToSubmitRenovationWork": True,
+                    "understandContractorLiability": True,
+                    "infoProvidedIsAccurate": True,
+                    "acceptModificationTerms": True,
+                    "awareOfProcessingAfterPayment": True,
+                },
             },
         }
 
