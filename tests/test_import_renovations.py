@@ -50,17 +50,20 @@ def test_load_renovation_cases_from_hive(tmp_path):
         "Status": {"Label": "Valmis", "Value": 752560003},
     }))
 
-    cases = load_renovation_cases(tmp_path)
-    assert len(cases) == 1
-    assert cases[0].title == "12345"
-    assert cases[0].is_renovation is True
+    entries = load_renovation_cases(tmp_path)
+    assert len(entries) == 1
+    case, path = entries[0]
+    assert case.title == "12345"
+    assert case.is_renovation is True
+    assert path.name == "2021-01-01_12345.yaml"
 
 
 def test_load_real_renovation_cases(premis_repair_dir):
-    cases = load_renovation_cases(premis_repair_dir)
-    assert len(cases) >= 30  # we know there are 36
-    for case in cases:
+    entries = load_renovation_cases(premis_repair_dir)
+    assert len(entries) >= 30  # we know there are 36
+    for case, path in entries:
         assert case.is_renovation
+        assert path.suffix == ".yaml"
         renovation = case.to_renovation_input(condo_id="test_condo")
         assert renovation["condominiumId"] == "test_condo"
         assert renovation["type"] == "shareholderRenovationWork"

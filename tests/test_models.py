@@ -128,13 +128,23 @@ def test_yaml_case_to_renovation_input():
     assert len(srw["contractors"]) == 1
     assert srw["contractors"][0]["companyName"] == "ASUA GROUP OY"
     assert srw["contractors"][0]["companyBusinessId"] == "2474742-4"
+    assert "_id" in srw["contractors"][0]
+    assert "_id" in srw["contractors"][0]["contact"]
+    # collateral must use camelCase keys
+    assert srw["collateral"]["authorizedToSubmitRenovationWork"] is True
+    assert srw["collateral"]["acceptModificationTerms"] is True
+    # workPerformer
+    assert srw["workPerfromer"]["performer"] == "contractor"
+    assert srw["workPerfromer"]["contractorWorkingSteps"] is not None
+    # title uses comma separator
+    assert renovation["title"] == "Muu muutostyö, G18"
 
 
 def test_yaml_case_parses_estimated_timing():
     case = YAMLCase(**SAMPLE_REPAIR_YAML)
     renovation = case.to_renovation_input(condo_id="c1")
-    assert renovation["startDate"] is not None
-    assert renovation["endDate"] is not None
+    assert renovation["startDate"] == "2020-11-09T00:00:00.000Z"
+    assert renovation["endDate"] == "2020-11-20T00:00:00.000Z"
 
 
 def test_yaml_case_heat_pump_maps_correctly():
