@@ -6,6 +6,7 @@ import typer
 from raksa.client import EstateAppClient, EstateAppError
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
 from raksa.meters.zaptec import read_all_reports, read_usage_report
+from raksa.meters.readings import load_readings
 from raksa.meters.estateapp import ensure_meters_exist, submit_readings, get_consumption_summary
 
 app = typer.Typer(help="Consumption meter management", no_args_is_help=True)
@@ -87,6 +88,81 @@ def import_zaptec(
         if s["category"] == "electricity":
             for y in s.get("years", []):
                 typer.echo(f"  {y['year']}: {y['value']:.2f} kWh")
+
+
+UTILITY_TO_CATEGORY = {
+    "electricity": "electricity",
+    "heat": "heat",
+    "water": "water",
+}
+
+UTILITY_TO_LABEL = {
+    "electricity": "Common electricity",
+    "heat": "District heating",
+    "water": "Water",
+}
+
+
+@app.command("import-readings")
+def import_readings(
+    readings_dir: Annotated[Path, typer.Argument(help="Directory of consumption reading YAML files")],
+    condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
+    submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
+):
+    """Import consumption readings from YAML files into EstateApp meters."""
+    cid = _get_condo_id(condo_id)
+    readings = load_readings(readings_dir)
+
+    if not readings:
+        typer.echo("No readings found.")
+        return
+
+    by_utility: dict[str, list] = {}
+    for r in readings:
+        by_utility.setdefault(r.utility, []).append(r)
+
+    for utility, utility_readings in sorted(by_utility.items()):
+        typer.echo(f"\n{utility} ({len(utility_readings)} readings):")
+        for r in utility_readings:
+            cost_total = sum(c.amount_eur for c in r.costs)
+            cost_str = f"  {cost_total:.2f} EUR" if r.costs else ""
+            typer.echo(f"  {r.period_start} - {r.period_end}  {r.consumption:>10.3f} {r.unit}{cost_str}")
+
+    if not submit:
+        typer.echo("\nDry-run mode. Pass --submit to actually import.")
+        return
+
+    client = _get_client()
+
+    for utility, utility_readings in sorted(by_utility.items()):
+        category = UTILITY_TO_CATEGORY.get(utility, utility)
+        label = utility_readings[0].meter_label
+
+        typer.echo(f"\nEnsuring meter exists: {label}...")
+        label_to_key = ensure_meters_exist(client, cid, [label], category=category)
+        key = label_to_key[label]
+        typer.echo(f"  {label} -> {key}")
+
+        typer.echo("Submitting readings...")
+        api_readings = [
+            {
+                "category": category,
+                "specification": key,
+                "readingDate": r.reading_date,
+                "value": r.consumption,
+                "type": "usual",
+            }
+            for r in utility_readings
+        ]
+        submit_readings(client, cid, api_readings)
+        typer.echo(f"  Submitted {len(api_readings)} reading(s)")
+
+    typer.echo("\nVerifying...")
+    summary_data = get_consumption_summary(client, cid)
+    for s in summary_data:
+        typer.echo(f"\n{s['category']}:")
+        for y in s.get("years", []):
+            typer.echo(f"  {y['year']}: {y['value']:.2f}")
 
 
 @app.command("summary")
