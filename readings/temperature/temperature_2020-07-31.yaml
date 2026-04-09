@@ -1,0 +1,9 @@
+meter_id: fmi-hervanta
+meter_label: Ulkolampotila (hervanta)
+utility: temperature
+unit: C
+period_start: '2020-07-01'
+period_end: '2020-07-31'
+reading_date: '2020-07-31'
+consumption: 15.4
+costs: []

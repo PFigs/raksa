@@ -6,6 +6,7 @@ import typer
 from raksa.client import EstateAppClient, EstateAppError
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
 from raksa.meters.zaptec import read_all_reports, read_usage_report
+from raksa.meters.fmi import fetch_monthly_temperatures
 from raksa.meters.readings import load_readings
 from raksa.meters.estateapp import ensure_meters_exist, submit_readings, get_consumption_summary
 
@@ -187,3 +188,95 @@ def summary(
         typer.echo(f"\n{cat}:")
         for y in category_data.get("years", []):
             typer.echo(f"  {y['year']}: {y['value']:.2f}")
+
+
+@app.command("fetch-temperature")
+def fetch_temperature(
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output directory for YAML files")] = Path("readings/temperature"),
+    place: Annotated[str, typer.Option("--place", help="FMI place name")] = "hervanta",
+    start_year: Annotated[int, typer.Option("--start", help="Start year")] = 2020,
+    end_year: Annotated[int, typer.Option("--end", help="End year")] = 2025,
+):
+    """Fetch monthly average temperature from FMI and save as YAML readings."""
+    import calendar
+    import yaml
+
+    typer.echo(f"Fetching temperature data for {place} ({start_year}-{end_year})...")
+    readings = fetch_monthly_temperatures(place, start_year, end_year)
+
+    if not readings:
+        typer.echo("No data returned from FMI.")
+        return
+
+    typer.echo(f"Got {len(readings)} monthly readings\n")
+    for r in readings:
+        typer.echo(f"  {r['year']}-{r['month']:02d}  {r['temperature_c']:>6.1f} C")
+
+    output.mkdir(parents=True, exist_ok=True)
+    for r in readings:
+        year, month = r["year"], r["month"]
+        last_day = calendar.monthrange(year, month)[1]
+        period_end = f"{year}-{month:02d}-{last_day:02d}"
+        data = {
+            "meter_id": f"fmi-{place}",
+            "meter_label": f"Ulkolampotila ({place})",
+            "utility": "temperature",
+            "unit": "C",
+            "period_start": f"{year}-{month:02d}-01",
+            "period_end": period_end,
+            "reading_date": period_end,
+            "consumption": r["temperature_c"],
+            "costs": [],
+        }
+        fname = f"temperature_{period_end}.yaml"
+        with open(output / fname, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    typer.echo(f"\nWrote {len(readings)} files to {output}/")
+
+
+@app.command("import-temperature")
+def import_temperature(
+    readings_dir: Annotated[Path, typer.Argument(help="Directory of temperature YAML files")] = Path("readings/temperature"),
+    condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
+    submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
+):
+    """Import temperature readings into EstateApp."""
+    cid = _get_condo_id(condo_id)
+    readings = load_readings(readings_dir)
+
+    if not readings:
+        typer.echo("No readings found.")
+        return
+
+    typer.echo(f"Temperature ({len(readings)} readings):")
+    for r in readings:
+        typer.echo(f"  {r.period_start} - {r.period_end}  {r.consumption:>6.1f} C")
+
+    if not submit:
+        typer.echo("\nDry-run mode. Pass --submit to actually import.")
+        return
+
+    client = _get_client()
+    label = readings[0].meter_label
+
+    typer.echo(f"\nEnsuring meter exists: {label}...")
+    # Temperature isn't a standard EstateApp category, use electricity as workaround
+    # Actually, let's check if there's a temperature category
+    label_to_key = ensure_meters_exist(client, cid, [label], category="electricity")
+    key = label_to_key[label]
+    typer.echo(f"  {label} -> {key}")
+
+    typer.echo("Submitting readings...")
+    api_readings = [
+        {
+            "category": "electricity",
+            "specification": key,
+            "readingDate": r.reading_date,
+            "value": r.consumption,
+            "type": "usual",
+        }
+        for r in readings
+    ]
+    submit_readings(client, cid, api_readings)
+    typer.echo(f"  Submitted {len(api_readings)} reading(s)")

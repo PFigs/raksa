@@ -1,0 +1,9 @@
+meter_id: fmi-hervanta
+meter_label: Ulkolampotila (hervanta)
+utility: temperature
+unit: C
+period_start: '2023-10-01'
+period_end: '2023-10-31'
+reading_date: '2023-10-31'
+consumption: 3.0
+costs: []
