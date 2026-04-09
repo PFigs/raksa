@@ -136,7 +136,10 @@ def import_renovations(
             if gig_id:
                 client.approve_renovation(gig_id)
                 client.upload_file(path, gig_id, "gigPreparation")
-                typer.echo(f"  OK  [{case.title}] -> {gig_id} (approved, file uploaded)")
+                chat_path = path.with_name(path.stem + "_chat.yaml")
+                if chat_path.exists():
+                    client.upload_file(chat_path, gig_id, "gigPreparation")
+                typer.echo(f"  OK  [{case.title}] -> {gig_id} (approved, files uploaded)")
             else:
                 typer.echo(f"  OK  [{case.title}] -> created (could not find ID for approval/upload)")
             success += 1
