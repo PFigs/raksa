@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from raksa.commands.renovations import load_renovation_cases
+from raksa.premis.cases import load_renovation_cases
 
 
 def test_load_renovation_cases_from_hive(tmp_path):

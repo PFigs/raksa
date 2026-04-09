@@ -15,6 +15,13 @@ src/raksa/
     auth.py         - raksa auth setup
     renovations.py  - raksa renovations {list,get,import}
     faults.py       - raksa faults {list,get,import}
+    meters.py       - raksa meters {import-zaptec,summary}
+  premis/
+    cases.py        - Read premis case exports (renovation + fault YAMLs)
+    invoices.py     - Read premis invoice exports (PDF + YAML metadata)
+  meters/
+    zaptec.py       - Read Zaptec EV charger Excel exports
+    estateapp.py    - EstateApp consumption meter API operations
 ```
 
 ## CLI commands
@@ -27,6 +34,8 @@ raksa renovations import <dir> [--submit]     # import from hive YAML (dry-run d
 raksa faults list [--condo-id ID]             # list fault notifications
 raksa faults get <fault-id>                   # show fault details
 raksa faults import <dir> [--submit]          # import from hive YAML (dry-run default)
+raksa meters import-zaptec <path> [--submit]  # import EV consumption from Zaptec Excel
+raksa meters summary                          # show consumption totals
 ```
 
 ## EstateApp API details
@@ -42,6 +51,7 @@ raksa faults import <dir> [--submit]          # import from hive YAML (dry-run d
 - API has intentional typos: `condomininumName` (missing d), `workPerfromer` (transposed r)
 - File uploads: `POST /upload` with FormData, use collection `gigPreparation` for gig attachments
 - Fault notifications require `informantInfo` with non-null `email`/`phone` (empty string ok)
+- Consumption meters: `specification` in readings must match the meter `key` (lowercase, underscores), not the label
 
 ## Development
 
@@ -56,3 +66,10 @@ Source data uses a hive directory structure: `year=*/house=*/*.yaml`
 - Repair cases (renovation notifications): `RequestType.Label == "Huoneistomuutosilmoitus"`
 - Common cases (fault reports): everything else
 - Chat files: `*_chat.yaml` siblings, uploaded alongside the main YAML
+
+## Premis data
+
+Premis (Tahkola) was the previous management system. We no longer have API access, but exported data lives locally:
+- Cases: hive YAML in `cases/common/` and `cases/repair/`
+- Invoices: PDF + YAML metadata in `invoices/year=*/month=*/`
+- The `premis/` module reads this exported data; it does not connect to Premis

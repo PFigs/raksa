@@ -2,11 +2,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-import yaml
 
 from raksa.client import EstateAppClient, EstateAppError
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
-from raksa.models import YAMLCase
+from raksa.premis.cases import load_renovation_cases, get_chat_path
 
 app = typer.Typer(help="Shareholder renovation management", no_args_is_help=True)
 
@@ -29,20 +28,6 @@ def _get_condo_id(condo_id: str | None) -> str:
         )
         raise typer.Exit(1)
     return resolved
-
-
-def load_renovation_cases(yaml_dir: Path) -> list[tuple[YAMLCase, Path]]:
-    cases = []
-    for path in yaml_dir.rglob("*.yaml"):
-        if path.stem.endswith("_chat"):
-            continue
-        raw = yaml.safe_load(path.read_text())
-        if raw is None:
-            continue
-        case = YAMLCase.model_validate(raw)
-        if case.is_renovation:
-            cases.append((case, path))
-    return cases
 
 
 @app.command("list")
@@ -136,9 +121,9 @@ def import_renovations(
             if gig_id:
                 client.approve_renovation(gig_id)
                 client.upload_file(path, gig_id, "gigPreparation")
-                chat_path = path.with_name(path.stem + "_chat.yaml")
-                if chat_path.exists():
-                    client.upload_file(chat_path, gig_id, "gigPreparation")
+                chat = get_chat_path(path)
+                if chat:
+                    client.upload_file(chat, gig_id, "gigPreparation")
                 typer.echo(f"  OK  [{case.title}] -> {gig_id} (approved, files uploaded)")
             else:
                 typer.echo(f"  OK  [{case.title}] -> created (could not find ID for approval/upload)")
