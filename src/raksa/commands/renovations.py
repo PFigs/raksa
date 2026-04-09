@@ -135,7 +135,7 @@ def import_renovations(
 
             if gig_id:
                 client.approve_renovation(gig_id)
-                client.upload_file(path, resolved_condo_id, "shareholderRenovation")
+                client.upload_file(path, gig_id, "shareholderRenovation")
                 typer.echo(f"  OK  [{case.title}] -> {gig_id} (approved, file uploaded)")
             else:
                 typer.echo(f"  OK  [{case.title}] -> created (could not find ID for approval/upload)")

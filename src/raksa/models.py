@@ -339,7 +339,8 @@ class YAMLCase(BaseModel):
             "endDate": end_date,
             "title": job_title,
             "shareholderRenovationWork": {
-                "apartmentAddress": apartment_address,
+                "apartmentAddress": self.building_address or "",
+                "premiseName": space_name or None,
                 "informant": informant,
                 "informantIsApartmentOwner": True,
                 "workDescription": self.public_description,
