@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -sS -L --max-time 30 'https://app.estateapp.com/swCheck.js' -o /tmp/estateapp_swcheck.js)",
-      "Read(//tmp/**)",
-      "Bash(uv run:*)"
-    ]
-  }
-}

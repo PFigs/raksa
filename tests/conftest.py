@@ -1,14 +1,17 @@
+import os
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
 
-from raksa.config import resolve_token, resolve_base_url, RaksaConfigError
+from raksa.config import resolve_token, resolve_base_url, resolve_condo_id, RaksaConfigError
 from raksa.client import EstateAppClient
 
+load_dotenv()
 
-PREMIS_CASES_DIR = Path("/home/silva/home projects/premis/cases")
-CONDO_ID = "kJXwXieRhQjFgRSQ9"
-KNOWN_GIG_ID = "69cd4f6246dd8c9ae4779f70"
+PREMIS_CASES_DIR = Path(os.environ.get("RAKSA_PREMIS_DIR", "premis/cases"))
+CONDO_ID = os.environ.get("RAKSA_CONDO_ID", "")
+KNOWN_GIG_ID = os.environ.get("RAKSA_KNOWN_GIG_ID", "")
 
 
 @pytest.fixture(scope="session")
@@ -23,11 +26,16 @@ def live_client():
 
 @pytest.fixture
 def condo_id():
-    return CONDO_ID
+    resolved = CONDO_ID or resolve_condo_id()
+    if not resolved:
+        pytest.skip("No RAKSA_CONDO_ID configured")
+    return resolved
 
 
 @pytest.fixture
 def known_gig_id():
+    if not KNOWN_GIG_ID:
+        pytest.skip("No RAKSA_KNOWN_GIG_ID configured")
     return KNOWN_GIG_ID
 
 

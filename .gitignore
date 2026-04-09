@@ -16,3 +16,10 @@ token
 # Exploration scripts
 bundle.js
 explore_*.py
+test_ingestion.py
+
+# Data files
+consumption_evs/
+
+# IDE / Claude
+.claude/settings.local.json
