@@ -4,7 +4,7 @@ import uuid
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Contact(BaseModel):
@@ -83,6 +83,12 @@ class ShareholderRenovationWork(BaseModel):
     informant: Contact | None = None
     shareholder: Contact | None = None
     contractors: list[Contractor] = Field(default_factory=list)
+
+    @field_validator("contractors", mode="before")
+    @classmethod
+    def _coerce_contractors(cls, v):
+        return v if v is not None else []
+
     informant_is_apartment_owner: bool | None = None
     work_description: str | None = None
     hazardous_substance_surveys_done: bool | None = None
@@ -134,6 +140,19 @@ class FaultNotification(BaseModel):
     contact_name: str | None = None
     additional_information: str | None = None
     completed_at: str | None = None
+
+
+class FileRef(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(alias="_id", default="")
+    alt: str | None = None
+    url: str | None = None
+    type: str | None = None
+    size: int | None = None
+    completion_date: str | None = Field(None, alias="completionDate")
+    parent_id: str | None = Field(None, alias="parentId")
+    collection_name: str | None = Field(None, alias="collectionName")
 
 
 RENOVATION_TYPE_MAP: dict[str, str] = {
