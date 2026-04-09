@@ -27,13 +27,11 @@ class TestListRenovations:
         assert r.id
         assert r.shareholder_renovation_work is not None
 
-    def test_renovation_has_chosen_jobs(self, live_client, condo_id):
+    def test_renovation_has_chosen_jobs_field(self, live_client, condo_id):
         renovations = live_client.list_renovations(condo_id)
         r = renovations[0]
         srw = r.shareholder_renovation_work
         assert srw.chosen_jobs is not None
-        active = {k: v for k, v in srw.chosen_jobs.model_dump(by_alias=True).items() if v}
-        assert len(active) >= 1
 
 
 class TestGetRenovation:

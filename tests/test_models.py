@@ -184,7 +184,11 @@ def test_yaml_case_to_fault_input():
     case = YAMLCase(**SAMPLE_COMMON_YAML)
     fault = case.to_fault_input()
     assert fault["faultDescription"] == "Ulko-oven yläpuolella oleva ulko valo on palanut."
-    assert fault["space"] == "A6"
+    assert fault["space"] == "apartment"
+    assert fault["apartment"] == "A6"
+    assert fault["informantInfo"]["firstName"] == "Asukas"
+    assert fault["informantInfo"]["lastName"] == "A6"
+    assert fault["informantInfo"]["email"] == ""
 
 
 def test_contact_from_camelcase_api():

@@ -168,7 +168,6 @@ query faultNotificationsOfCodominiums($condominiumId: ID!) {
     _id
     condominiumId
     createdAt
-    informantInfo { firstName lastName email phone }
     apartment
     faultDescription
     streetAddress
@@ -187,7 +186,6 @@ query faultNotificationById($faultNotificationId: ID!) {
     _id
     condominiumId
     createdAt
-    informantInfo { firstName lastName email phone }
     apartment
     faultDescription
     streetAddress

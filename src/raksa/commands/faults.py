@@ -31,7 +31,7 @@ def _get_condo_id(condo_id: str | None) -> str:
     return resolved
 
 
-def load_fault_cases(yaml_dir: Path) -> list[YAMLCase]:
+def load_fault_cases(yaml_dir: Path) -> list[tuple[YAMLCase, Path]]:
     cases = []
     for path in yaml_dir.rglob("*.yaml"):
         if path.stem.endswith("_chat"):
@@ -41,7 +41,7 @@ def load_fault_cases(yaml_dir: Path) -> list[YAMLCase]:
             continue
         case = YAMLCase.model_validate(raw)
         if not case.is_renovation:
-            cases.append(case)
+            cases.append((case, path))
     return cases
 
 
@@ -100,15 +100,17 @@ def import_faults(
 ):
     """Import fault cases from YAML files into EstateApp."""
     resolved_condo_id = _get_condo_id(condo_id)
-    cases = load_fault_cases(yaml_dir)
+    entries = load_fault_cases(yaml_dir)
 
-    if not cases:
+    if not entries:
         typer.echo("No fault cases found.")
         return
 
-    typer.echo(f"Found {len(cases)} fault case(s):")
-    for case in cases:
-        typer.echo(f"  {case.title}")
+    typer.echo(f"Found {len(entries)} fault case(s):")
+    for case, path in entries:
+        space = case.space.name if case.space else "?"
+        desc = (case.description or "")[:50]
+        typer.echo(f"  {case.title}  {space:6s}  {desc}")
 
     if not submit:
         typer.echo("\nDry-run mode. Pass --submit to actually import.")
@@ -116,13 +118,27 @@ def import_faults(
 
     client = _get_client()
     success = 0
-    for case in cases:
-        fault_input = case.to_fault_input()
+    for case, path in entries:
         try:
+            fault_input = case.to_fault_input()
             fault_id = client.create_fault(resolved_condo_id, fault_input)
-            typer.echo(f"  Created: {fault_id} ({case.title})")
-            success += 1
-        except EstateAppError as e:
-            typer.echo(f"  Failed {case.title}: {e}", err=True)
 
-    typer.echo(f"\nImported {success}/{len(cases)} fault case(s).")
+            # Mark as completed (historical)
+            client._gql("""
+            mutation completeFaultNotification($faultNotificationId: ID!) {
+                completeFaultNotification(faultNotificationId: $faultNotificationId)
+            }
+            """, {"faultNotificationId": fault_id})
+
+            # Upload YAML files
+            client.upload_file(path, fault_id, "faultNotification")
+            chat_path = path.with_name(path.stem + "_chat.yaml")
+            if chat_path.exists():
+                client.upload_file(chat_path, fault_id, "faultNotification")
+
+            typer.echo(f"  OK  [{case.title}] -> {fault_id} (completed, files uploaded)")
+            success += 1
+        except (EstateAppError, Exception) as e:
+            typer.echo(f"  FAIL [{case.title}]: {e}", err=True)
+
+    typer.echo(f"\nImported {success}/{len(entries)} fault case(s).")
