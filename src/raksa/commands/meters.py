@@ -134,9 +134,13 @@ def import_readings(
 
     client = _get_client()
 
-    for utility, utility_readings in sorted(by_utility.items()):
-        category = UTILITY_TO_CATEGORY.get(utility, utility)
-        label = utility_readings[0].meter_label
+    # Group by meter label (not utility) so multiple meters of same utility work
+    by_label: dict[str, list] = {}
+    for r in readings:
+        by_label.setdefault(r.meter_label, []).append(r)
+
+    for label, label_readings in sorted(by_label.items()):
+        category = UTILITY_TO_CATEGORY.get(label_readings[0].utility, label_readings[0].utility)
 
         typer.echo(f"\nEnsuring meter exists: {label}...")
         label_to_key = ensure_meters_exist(client, cid, [label], category=category)
@@ -152,7 +156,7 @@ def import_readings(
                 "value": r.consumption,
                 "type": "usual",
             }
-            for r in utility_readings
+            for r in label_readings
         ]
         submit_readings(client, cid, api_readings)
         typer.echo(f"  Submitted {len(api_readings)} reading(s)")
