@@ -123,7 +123,8 @@ def test_yaml_case_to_renovation_input():
     assert renovation["type"] == "shareholderRenovationWork"
     assert renovation["status"] == "UPCOMING"
     srw = renovation["shareholderRenovationWork"]
-    assert srw["apartmentAddress"] == "Asuntamaanraitti 1 B G18"
+    assert srw["apartmentAddress"] == "Asuntamaanraitti 1 B"
+    assert srw["premiseName"] == "G18"
     assert srw["chosenJobs"]["otherChanges"] is True
     assert len(srw["contractors"]) == 1
     assert srw["contractors"][0]["companyName"] == "ASUA GROUP OY"
