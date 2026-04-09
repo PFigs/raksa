@@ -1,0 +1,14 @@
+meter_id: '643007572070390203'
+meter_label: Sähkö yhteinen (643007572070390203)
+utility: electricity
+unit: kWh
+period_start: '2025-04-01'
+period_end: '2025-04-30'
+reading_date: '2025-04-30'
+consumption: 1016.01
+costs:
+- provider: Tampereen Energia Sähköverkko Oy
+  amount_eur: 122.43
+  type: distribution
+  invoice_number: '5002811729'
+  source_file: 2025-05-05_Tampereen_Energia_Sähköverkko_Oy_5002811729.pdf
