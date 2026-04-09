@@ -1,0 +1,14 @@
+meter_id: '14667678'
+meter_label: Vesi (14667678)
+utility: water
+unit: m3
+period_start: '2024-04-01'
+period_end: '2024-06-30'
+reading_date: '2024-06-30'
+consumption: 404.0
+costs:
+- provider: Tampereen Vesi Oy
+  amount_eur: 2275.61
+  type: usage
+  invoice_number: '291049649'
+  source_file: 2024-06-19_Tampereen_Vesi_Oy_291049649.pdf

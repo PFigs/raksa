@@ -1,0 +1,14 @@
+meter_id: '14667678'
+meter_label: Vesi (14667678)
+utility: water
+unit: m3
+period_start: '2021-07-01'
+period_end: '2021-09-30'
+reading_date: '2021-09-30'
+consumption: 437.0
+costs:
+- provider: Tampereen kaupunki
+  amount_eur: 2279.19
+  type: usage
+  invoice_number: '290173992'
+  source_file: 2021-09-15_Tampereen_kaupunki_290173992.pdf

@@ -1,0 +1,14 @@
+meter_id: '55306988'
+meter_label: Kaukolämpö (55306988)
+utility: heat
+unit: MWh
+period_start: '2025-06-01'
+period_end: '2025-06-30'
+reading_date: '2025-06-30'
+consumption: 10.94
+costs:
+- provider: Tampereen Energia Oy
+  amount_eur: 812.32
+  type: usage
+  invoice_number: '6003499820'
+  source_file: 2025-07-01_Tampereen_Energia_Oy_6003499820.pdf

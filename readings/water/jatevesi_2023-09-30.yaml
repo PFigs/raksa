@@ -1,0 +1,14 @@
+meter_id: '14667678'
+meter_label: Jätevesi (14667678)
+utility: water
+unit: m3
+period_start: '2023-07-01'
+period_end: '2023-09-30'
+reading_date: '2023-09-30'
+consumption: 410.0
+costs:
+- provider: Tampereen kaupunki
+  amount_eur: 2300.08
+  type: usage
+  invoice_number: '290381292'
+  source_file: 2023-09-19_Tampereen_kaupunki_290381292.pdf
