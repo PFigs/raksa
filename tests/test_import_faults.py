@@ -39,16 +39,20 @@ def test_load_fault_cases_from_hive(tmp_path):
         "Status": {"Label": "Valmis", "Value": 752560003},
     }))
 
-    cases = load_fault_cases(tmp_path)
-    assert len(cases) == 1
-    assert cases[0].title == "1029483"
-    assert cases[0].is_renovation is False
+    entries = load_fault_cases(tmp_path)
+    assert len(entries) == 1
+    case, path = entries[0]
+    assert case.title == "1029483"
+    assert case.is_renovation is False
+    assert path.name == "2019-11-17_1029483.yaml"
 
 
 def test_load_real_fault_cases(premis_common_dir):
-    cases = load_fault_cases(premis_common_dir)
-    assert len(cases) >= 40  # we know there are 53
-    for case in cases:
+    entries = load_fault_cases(premis_common_dir)
+    assert len(entries) >= 40  # we know there are 53
+    for case, path in entries:
         assert not case.is_renovation
+        assert path.suffix == ".yaml"
         fault = case.to_fault_input()
-        assert fault["faultDescription"] or fault["space"]
+        assert fault["faultDescription"] or fault["apartment"]
+        assert fault["informantInfo"]["email"] == ""

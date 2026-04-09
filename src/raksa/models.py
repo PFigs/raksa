@@ -359,12 +359,17 @@ class YAMLCase(BaseModel):
         }
 
     def to_fault_input(self) -> dict:
-        contact_name = self.contact_person.name if self.contact_person else None
         space_name = self.space.name if self.space else None
         return {
-            "faultDescription": self.description,
-            "space": space_name,
+            "faultDescription": self.description or self.public_description or "",
+            "space": "apartment" if space_name else None,
             "apartment": space_name,
-            "streetAddress": self.building_address,
-            "contactName": contact_name,
+            "streetAddress": self.building_address or "Asuntamaanraitti 1",
+            "contactName": self.contact_person.name if self.contact_person else None,
+            "informantInfo": {
+                "firstName": "Asukas",
+                "lastName": space_name or "",
+                "email": "",
+                "phone": "",
+            },
         }
