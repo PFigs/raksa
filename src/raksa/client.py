@@ -1,8 +1,9 @@
 import re
+from pathlib import Path
 
 import httpx
 
-from raksa.models import FaultNotification, ShareholderRenovation
+from raksa.models import FaultNotification, FileRef, ShareholderRenovation
 
 
 class EstateAppError(Exception):
@@ -213,6 +214,33 @@ mutation editFaultNotification(
 }
 """
 
+LIST_FILES_QUERY = """
+query filesByParentId($parentId: ID!, $collectionNames: [String]) {
+  filesByParentId(parentId: $parentId, collectionNames: $collectionNames) {
+    _id
+    alt
+    url
+    type
+    size
+    completionDate
+    parentId
+    collectionName
+  }
+}
+"""
+
+REMOVE_FILE_MUTATION = """
+mutation removeFile($fileRefId: ID!, $url: String!) {
+  removeFile(fileRefId: $fileRefId, url: $url)
+}
+"""
+
+APPROVE_RENOVATION_MUTATION = """
+mutation editShareholderRenovationApproval($gigId: ID!, $approvalInput: ApprovalInput!) {
+  editShareholderRenovationApproval(gigId: $gigId, approvalInput: $approvalInput)
+}
+"""
+
 _CAMEL_RE = re.compile(r"(?<=[a-z0-9])([A-Z])")
 
 
@@ -293,3 +321,61 @@ class EstateAppClient:
             },
         )
         return data["editFaultNotification"]
+
+    # Files
+
+    def upload_file(
+        self,
+        file_path: Path,
+        parent_id: str,
+        collection_name: str = "shareholderRenovation",
+        user_id: str | None = None,
+    ) -> FileRef:
+        """Upload a file and return the created FileRef."""
+        mime = "text/yaml" if file_path.suffix in (".yaml", ".yml") else "application/octet-stream"
+        with open(file_path, "rb") as f:
+            resp = self._http.post(
+                f"{self._base_url}/upload",
+                headers={"Authorization": self._token},
+                data={
+                    "collectionName": collection_name,
+                    "collectionParentName": collection_name,
+                    "collectionItemId": parent_id,
+                    "userId": user_id or "anon",
+                },
+                files={"files": (file_path.name, f, mime)},
+            )
+        resp.raise_for_status()
+        body = resp.json().get("body", {})
+        files = body.get("files", [])
+        if not files:
+            raise EstateAppError(f"Upload returned no files: {resp.json()}")
+        return FileRef.model_validate(files[0])
+
+    def list_files(
+        self,
+        parent_id: str,
+        collection_names: list[str] | None = None,
+    ) -> list[FileRef]:
+        variables: dict = {"parentId": parent_id}
+        if collection_names:
+            variables["collectionNames"] = collection_names
+        data = self._gql(LIST_FILES_QUERY, variables)
+        return [FileRef.model_validate(f) for f in data.get("filesByParentId", [])]
+
+    def remove_file(self, file_ref_id: str, url: str) -> str:
+        data = self._gql(REMOVE_FILE_MUTATION, {"fileRefId": file_ref_id, "url": url})
+        return data["removeFile"]
+
+    # Approval
+
+    def approve_renovation(self, gig_id: str, approved: bool = True) -> None:
+        self._gql(APPROVE_RENOVATION_MUTATION, {
+            "gigId": gig_id,
+            "approvalInput": {
+                "approved": approved,
+                "needsMonitoring": False,
+                "needsFinalReport": False,
+                "finalReportSubmitted": False,
+            },
+        })
