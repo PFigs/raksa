@@ -63,14 +63,15 @@ def import_zaptec(
     client = _get_client()
 
     typer.echo("\nEnsuring meters exist...")
-    ensure_meters_exist(client, cid, charger_labels, category="electricity")
-    typer.echo("  OK")
+    label_to_key = ensure_meters_exist(client, cid, charger_labels, category="electricity")
+    for label, key in label_to_key.items():
+        typer.echo(f"  {label} -> {key}")
 
-    typer.echo("Submitting consumption data...")
+    typer.echo("\nSubmitting consumption data...")
     api_readings = [
         {
             "category": "electricity",
-            "specification": r.charger,
+            "specification": label_to_key[r.charger],
             "readingDate": r.period_end,
             "value": r.energy_kwh,
             "type": "usual",
