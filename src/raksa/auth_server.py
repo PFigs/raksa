@@ -12,15 +12,10 @@ def _find_free_port() -> int:
 
 
 def _build_html(port: int) -> str:
-    fetch_snippet = (
-        "fetch('http://localhost:{port}/token', {{"
-        "method:'POST',"
-        "headers:{{'Content-Type':'application/json'}},"
-        "body:JSON.stringify({{"
+    copy_snippet = (
+        "copy(JSON.stringify({"
         "loginToken:localStorage.getItem('Meteor.loginToken'),"
-        "userId:localStorage.getItem('Meteor.userId')"
-        "}})"
-        "}})".format(port=port)
+        "userId:localStorage.getItem('Meteor.userId')}))"
     )
 
     return """<!DOCTYPE html>
@@ -28,7 +23,7 @@ def _build_html(port: int) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EstateApp Auth Setup</title>
+  <title>Raksa Auth Setup</title>
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -55,18 +50,17 @@ def _build_html(port: int) -> str:
       margin-bottom: 0.5rem;
       color: #fff;
     }}
+    .step-label {{
+      color: #4da6ff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }}
     p {{
       color: #a0a0b0;
       line-height: 1.6;
       margin-bottom: 1.25rem;
     }}
-    ol {{
-      color: #a0a0b0;
-      line-height: 1.8;
-      padding-left: 1.25rem;
-      margin-bottom: 1.5rem;
-    }}
-    ol li {{ margin-bottom: 0.25rem; }}
     a {{ color: #4da6ff; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
     .code-block {{
@@ -81,7 +75,7 @@ def _build_html(port: int) -> str:
     }}
     .code-block code {{
       font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-      font-size: 0.78rem;
+      font-size: 0.82rem;
       color: #7dd3fc;
       flex: 1;
       word-break: break-all;
@@ -109,20 +103,18 @@ def _build_html(port: int) -> str:
       color: #fff;
       padding: 0.6rem 1.25rem;
       font-size: 0.9rem;
+      width: 100%;
     }}
     .btn-primary:hover {{ background: #3a8fe8; }}
-    .divider {{
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 1.25rem;
-      color: #555;
-      font-size: 0.82rem;
+    .section {{
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid #2a2a4a;
     }}
-    .divider::before, .divider::after {{
-      content: '';
-      flex: 1;
-      border-top: 1px solid #2a2a4a;
+    .section:last-of-type {{
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
     }}
     textarea {{
       width: 100%;
@@ -134,7 +126,7 @@ def _build_html(port: int) -> str:
       font-size: 0.82rem;
       padding: 0.75rem;
       resize: vertical;
-      min-height: 80px;
+      min-height: 60px;
       margin-bottom: 0.75rem;
       outline: none;
     }}
@@ -144,7 +136,7 @@ def _build_html(port: int) -> str:
       text-align: center;
       padding: 1.5rem 0;
     }}
-    .success .icon {{ font-size: 2.5rem; margin-bottom: 0.75rem; }}
+    .success .checkmark {{ font-size: 2.5rem; margin-bottom: 0.75rem; color: #4ade80; }}
     .success h2 {{ font-size: 1.2rem; color: #4ade80; margin-bottom: 0.5rem; }}
     .success p {{ margin: 0; font-size: 0.9rem; }}
     .error-msg {{
@@ -158,26 +150,29 @@ def _build_html(port: int) -> str:
 <body>
   <div class="card">
     <div id="form-content">
-      <h1>EstateApp Auth Setup</h1>
-      <p>Paste the snippet below into the browser console while on
-        <a href="https://app.estateapp.com" target="_blank">app.estateapp.com</a>
-        to send your token automatically.</p>
-      <ol>
-        <li>Open <a href="https://app.estateapp.com" target="_blank">app.estateapp.com</a> in another tab and log in</li>
-        <li>Open DevTools (F12) and go to the Console tab</li>
-        <li>Paste the snippet below and press Enter</li>
-      </ol>
-      <div class="code-block">
-        <code id="snippet">{snippet}</code>
-        <button class="btn btn-copy" onclick="copySnippet()">Copy</button>
+      <h1>Raksa Auth Setup</h1>
+      <p>Extract your token from EstateApp in two steps.</p>
+
+      <div class="section">
+        <div class="step-label">Step 1 &mdash; Copy token from EstateApp</div>
+        <p>Open <a href="https://app.estateapp.com" target="_blank">app.estateapp.com</a>,
+           press F12, go to Console, and paste this snippet:</p>
+        <div class="code-block">
+          <code id="snippet">{snippet}</code>
+          <button class="btn btn-copy" onclick="copySnippet()">Copy</button>
+        </div>
+        <p style="margin-bottom:0">This copies your token to the clipboard.</p>
       </div>
-      <div class="divider">or paste manually</div>
-      <textarea id="manual-input" placeholder='Paste JSON here, e.g. {{"loginToken":"...","userId":"..."}}'></textarea>
-      <div class="error-msg" id="error-msg"></div>
-      <button class="btn btn-primary" onclick="saveManual()">Save</button>
+
+      <div class="section">
+        <div class="step-label">Step 2 &mdash; Paste it here</div>
+        <textarea id="manual-input" placeholder='Paste the copied JSON here'></textarea>
+        <div class="error-msg" id="error-msg"></div>
+        <button class="btn btn-primary" onclick="saveToken()">Save</button>
+      </div>
     </div>
     <div class="success" id="success">
-      <div class="icon">&#10003;</div>
+      <div class="checkmark">&#10003;</div>
       <h2>Token saved!</h2>
       <p>You can close this tab. The CLI will continue automatically.</p>
     </div>
@@ -204,24 +199,24 @@ def _build_html(port: int) -> str:
       el.style.display = 'block';
     }}
 
-    function saveManual() {{
+    function saveToken() {{
       const raw = document.getElementById('manual-input').value.trim();
+      if (!raw) {{
+        showError('Paste the JSON from step 1 first.');
+        return;
+      }}
       let data;
       try {{
         data = JSON.parse(raw);
       }} catch (e) {{
-        showError('Invalid JSON. Please check the format and try again.');
+        showError('Invalid JSON. Make sure you copied from the console correctly.');
         return;
       }}
       if (!data.loginToken || !data.userId) {{
-        showError("JSON must contain 'loginToken' and 'userId'.");
+        showError("Missing loginToken or userId. Run the snippet from step 1 again.");
         return;
       }}
       document.getElementById('error-msg').style.display = 'none';
-      postToken(data);
-    }}
-
-    function postToken(data) {{
       fetch('/token', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
@@ -233,7 +228,7 @@ def _build_html(port: int) -> str:
     }}
   </script>
 </body>
-</html>""".format(snippet=fetch_snippet)
+</html>""".format(snippet=copy_snippet)
 
 
 def run_auth_server() -> tuple[str, str] | None:
