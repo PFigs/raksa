@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from raksa.meters.datahub import DatahubError, read_export
+from raksa.meters.datahub import DatahubError, MonthlyConsumption, read_export, plan_readings
 
 GSRN = "643000000000000000"
 HEADER = "MeteringPointGSRN;Product Type;Resolution;Unit Type;Reading Type;Start Time;Quantity;Quality"
@@ -134,3 +134,54 @@ def test_export_without_rows_is_an_error(tmp_path):
 
     with pytest.raises(DatahubError, match="no rows"):
         read_export(csv_path)
+
+
+def _month(year: int, month: int, kwh: float) -> MonthlyConsumption:
+    return MonthlyConsumption(year=year, month=month, consumption_kwh=kwh, estimated_intervals=0)
+
+
+def _reading(reading_date: str, value: float, _id: str = "r1") -> dict:
+    return {"specification": "sähkö_yhteinen_(643000000000000000)",
+            "readingDate": reading_date, "value": value, "_id": _id}
+
+
+def test_month_absent_from_estateapp_is_an_insert():
+    planned = plan_readings([_month(2026, 2, 1179.2)], [])
+
+    assert [(p.reading_date, p.action, p.value) for p in planned] == [("2026-02-28", "insert", 1179.2)]
+    assert planned[0].existing_id is None
+
+
+def test_matching_value_is_skipped():
+    planned = plan_readings([_month(2026, 1, 1227.44)], [_reading("2026-01-31", 1227.44)])
+
+    assert planned[0].action == "skip"
+    assert planned[0].existing_value == 1227.44
+
+
+def test_differing_value_is_replaced_and_carries_the_id():
+    planned = plan_readings([_month(2022, 3, 778.03)], [_reading("2022-03-31", 822.92, _id="abc123")])
+
+    assert planned[0].action == "replace"
+    assert planned[0].value == 778.03
+    assert planned[0].existing_value == 822.92
+    assert planned[0].existing_id == "abc123"
+
+
+def test_difference_below_half_a_cent_is_a_skip():
+    planned = plan_readings([_month(2026, 1, 1227.44)], [_reading("2026-01-31", 1227.441)])
+
+    assert planned[0].action == "skip"
+
+
+def test_epoch_millis_reading_dates_are_matched():
+    epoch_ms = "1769817600000"  # 2026-01-31 00:00 UTC
+    planned = plan_readings([_month(2026, 1, 1227.44)], [_reading(epoch_ms, 1227.44)])
+
+    assert planned[0].action == "skip"
+
+
+def test_existing_readings_outside_the_export_are_ignored():
+    planned = plan_readings([_month(2026, 2, 100.0)], [_reading("2019-01-31", 5.0)])
+
+    assert [p.action for p in planned] == ["insert"]

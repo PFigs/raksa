@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
+from raksa.meters.estateapp import reading_date_to_iso
+
 HELSINKI = ZoneInfo("Europe/Helsinki")
 UTC = datetime.timezone.utc
 
@@ -96,3 +98,52 @@ def read_export(file_path: Path) -> ExportSummary:
             incomplete.append(f"{key[0]}-{key[1]:02d}")
 
     return ExportSummary(gsrn=points.pop(), months=months, incomplete=incomplete)
+
+
+VALUE_TOLERANCE = 0.005
+
+
+class PlannedReading(BaseModel):
+    reading_date: str
+    value: float
+    action: str
+    existing_value: float | None = None
+    existing_id: str | None = None
+
+
+def plan_readings(
+    months: list[MonthlyConsumption],
+    existing: list[dict],
+) -> list[PlannedReading]:
+    """Decide per month whether to insert, skip or replace an EstateApp reading."""
+    by_date: dict[str, dict] = {}
+    for reading in existing:
+        iso = reading_date_to_iso(reading.get("readingDate"))
+        if iso is not None:
+            by_date[iso] = reading
+
+    planned = []
+    for month in months:
+        current = by_date.get(month.reading_date)
+        if current is None:
+            planned.append(
+                PlannedReading(
+                    reading_date=month.reading_date,
+                    value=month.consumption_kwh,
+                    action="insert",
+                )
+            )
+            continue
+
+        existing_value = float(current["value"])
+        same = abs(existing_value - month.consumption_kwh) < VALUE_TOLERANCE
+        planned.append(
+            PlannedReading(
+                reading_date=month.reading_date,
+                value=month.consumption_kwh,
+                action="skip" if same else "replace",
+                existing_value=existing_value,
+                existing_id=None if same else str(current.get("_id")),
+            )
+        )
+    return planned
