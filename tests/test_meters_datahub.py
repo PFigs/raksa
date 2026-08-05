@@ -89,6 +89,18 @@ def test_non_ok_quality_is_summed_and_counted(tmp_path):
     assert summary.months[0].estimated_intervals == 1
 
 
+def test_interior_gap_makes_the_month_incomplete(tmp_path):
+    csv_path = tmp_path / "export.csv"
+    rows = _steps("2026-01-31T22:00:00Z", 1, "PT1H", "1,000000")
+    rows += _steps("2026-02-28T21:00:00Z", 1, "PT1H", "1,000000")
+    _write_csv(csv_path, rows)
+
+    summary = read_export(csv_path)
+
+    assert summary.months == []
+    assert summary.incomplete == ["2026-02"]
+
+
 def test_two_metering_points_is_an_error(tmp_path):
     csv_path = tmp_path / "export.csv"
     lines = [HEADER,
