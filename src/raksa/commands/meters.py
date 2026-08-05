@@ -292,7 +292,7 @@ def import_datahub(
         raise typer.Exit(1)
 
     typer.echo(f"\n{label} -> {key}\n")
-    for entry, month in zip(planned, export.months):
+    for entry, month in zip(planned, export.months, strict=True):
         detail = ""
         if entry.action == "replace":
             detail = f"  (was {entry.existing_value:.2f} -> {entry.value:.2f})"

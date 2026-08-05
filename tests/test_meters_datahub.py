@@ -346,6 +346,38 @@ def test_import_datahub_skips_matching_value(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert calls["submitted"] == []
     assert calls["replaced"] == []
+    assert calls["labels"] is None
+
+
+def test_import_datahub_fails_when_an_insert_is_refused(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    _stub_estateapp(monkeypatch, [])
+    monkeypatch.setattr(meters_cmd, "submit_readings",
+                        lambda _c, _cid, readings: {"inserted": 0, "refused": len(readings)})
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 1
+    assert "refused" in result.output
+
+
+def test_import_datahub_fails_when_a_replace_is_refused(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    _stub_estateapp(monkeypatch, [
+        {"specification": "sähkö_yhteinen_(643000000000000000)",
+         "readingDate": "2026-02-28", "value": 999.0, "_id": "abc123"},
+    ])
+    monkeypatch.setattr(meters_cmd, "replace_reading",
+                        lambda _c, _cid, _id, _reading: {"inserted": 0, "refused": 1})
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 1
+    assert "refused" in result.output
 
 
 def test_import_datahub_reports_incomplete_months(tmp_path, monkeypatch):
