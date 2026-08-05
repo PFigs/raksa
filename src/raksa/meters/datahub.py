@@ -16,7 +16,6 @@ UTC = datetime.timezone.utc
 RESOLUTIONS = {
     "PT15M": datetime.timedelta(minutes=15),
     "PT1H": datetime.timedelta(hours=1),
-    "P1D": datetime.timedelta(days=1),
 }
 
 

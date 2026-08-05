@@ -34,19 +34,29 @@ def _reading(specification: str, reading_date, value: float) -> dict:
 
 
 def _stub_sync(monkeypatch, sessions, existing=(), submit_result=None) -> dict:
-    """Stub Zaptec fetch plus EstateApp read/write for the sync command."""
+    """Stub Zaptec fetch plus EstateApp read/write for the sync command.
+
+    `stored` models what EstateApp actually holds, so the post-submit
+    verification re-read sees submitted readings as no longer new.
+    """
     monkeypatch.setenv("RAKSA_ZAPTEC_USERNAME", "zap-user")
     monkeypatch.setenv("RAKSA_ZAPTEC_PASSWORD", "zap-pass")
     monkeypatch.setenv("RAKSA_ZAPTEC_INSTALLATION_ID", "inst-1")
 
+    stored = list(existing)
     calls: dict = {"submitted": None, "window": None}
 
     def _get_consumptions(_client, _condo_id, start_date, end_date, **_kwargs):
-        calls["window"] = (start_date, end_date)
-        return list(existing)
+        if calls["window"] is None:
+            calls["window"] = (start_date, end_date)
+        return list(stored)
 
     def _submit_readings(_client, _condo_id, readings):
         calls["submitted"] = readings
+        stored.extend(
+            {"specification": r["specification"], "readingDate": r["readingDate"], "value": r["value"]}
+            for r in readings
+        )
         return submit_result or {"inserted": len(readings), "refused": 0}
 
     monkeypatch.setattr(meters_cmd, "fetch_archived_sessions", lambda **_: list(sessions))
@@ -259,6 +269,20 @@ def test_sync_zaptec_refused_readings_fail_the_run(monkeypatch):
 
     assert result.exit_code == 1
     assert "refused" in result.output
+
+
+def test_sync_zaptec_fails_verification_when_nothing_was_actually_stored(monkeypatch):
+    _stub_sync(
+        monkeypatch,
+        sessions=[_session("s1", "AP 01", "2026-08-02T10:00:00+00:00", 7.5)],
+    )
+    monkeypatch.setattr(meters_cmd, "submit_readings",
+                        lambda _c, _cid, readings: {"inserted": len(readings), "refused": 0})
+
+    result = _run("--submit")
+
+    assert result.exit_code == 1
+    assert "not stored as expected" in result.output
 
 
 def test_sync_zaptec_requires_installation_id(monkeypatch):

@@ -255,25 +255,43 @@ def _six_hundred_hours(path: Path):
 
 
 def _stub_estateapp(monkeypatch, existing: list[dict]):
+    """Stub EstateApp reads/writes for the import command.
+
+    `stored` models what EstateApp actually holds, so the post-submit
+    verification re-read sees submitted/replaced readings as settled.
+    """
+    stored = list(existing)
     calls = {"submitted": [], "replaced": [], "window": None, "labels": None}
 
     def _get_consumptions(_client, _condo_id, start_date, end_date, **_kwargs):
         calls["window"] = (start_date, end_date)
-        return list(existing)
+        return list(stored)
 
     def _ensure(_client, _cid, labels, **_kwargs):
         calls["labels"] = list(labels)
         return {label: meters_cmd.label_to_key(label) for label in labels}
 
+    def _submit_readings(_client, _cid, readings):
+        calls["submitted"].extend(readings)
+        stored.extend(
+            {"specification": r["specification"], "readingDate": r["readingDate"], "value": r["value"]}
+            for r in readings
+        )
+        return {"inserted": len(readings), "refused": 0}
+
+    def _replace_reading(_client, _cid, consumption_id, reading):
+        calls["replaced"].append((consumption_id, reading))
+        for record in stored:
+            if str(record.get("_id")) == consumption_id:
+                record["value"] = reading["value"]
+                break
+        return {"inserted": 1, "refused": 0}
+
     monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
     monkeypatch.setattr(meters_cmd, "get_consumptions", _get_consumptions)
     monkeypatch.setattr(meters_cmd, "ensure_meters_exist", _ensure)
-    monkeypatch.setattr(meters_cmd, "submit_readings",
-                        lambda _c, _cid, readings: calls["submitted"].extend(readings)
-                        or {"inserted": len(readings), "refused": 0})
-    monkeypatch.setattr(meters_cmd, "replace_reading",
-                        lambda _c, _cid, cid, reading: calls["replaced"].append((cid, reading))
-                        or {"inserted": 1, "refused": 0})
+    monkeypatch.setattr(meters_cmd, "submit_readings", _submit_readings)
+    monkeypatch.setattr(meters_cmd, "replace_reading", _replace_reading)
     return calls
 
 
@@ -378,6 +396,20 @@ def test_import_datahub_fails_when_a_replace_is_refused(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert "refused" in result.output
+
+
+def test_import_datahub_fails_verification_when_nothing_was_actually_stored(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    _stub_estateapp(monkeypatch, [])
+    monkeypatch.setattr(meters_cmd, "submit_readings",
+                        lambda _c, _cid, readings: {"inserted": len(readings), "refused": 0})
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 1
+    assert "not stored as expected" in result.output
 
 
 def test_import_datahub_reports_incomplete_months(tmp_path, monkeypatch):

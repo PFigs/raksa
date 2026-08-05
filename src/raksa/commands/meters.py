@@ -155,6 +155,19 @@ def _select_new_sessions(
     return new_sessions
 
 
+def _datahub_existing_readings(client: EstateAppClient, condo_id: str, key: str, export) -> list[dict]:
+    return [
+        reading
+        for reading in get_consumptions(
+            client,
+            condo_id,
+            start_date=f"{export.months[0].year}-{export.months[0].month:02d}-01",
+            end_date=export.months[-1].reading_date,
+        )
+        if reading.get("specification") == key
+    ]
+
+
 def _write_sync_csv(csv_path: Path, sessions: list[ZaptecSession]):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="") as f:
@@ -248,6 +261,15 @@ def sync_zaptec(
         typer.echo("Error: some readings were refused by EstateApp.", err=True)
         raise typer.Exit(1)
 
+    still_missing = _select_new_sessions(client, cid, new_sessions)
+    if still_missing:
+        typer.echo(
+            f"Error: {len(still_missing)} session(s) not stored as expected.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo(f"Verified {len(new_sessions)} session(s) in EstateApp.")
+
 
 @app.command("import-datahub")
 def import_datahub(
@@ -275,18 +297,8 @@ def import_datahub(
     key = label_to_key(label)
     client = _get_client()
 
-    existing = [
-        reading
-        for reading in get_consumptions(
-            client,
-            cid,
-            start_date=f"{export.months[0].year}-{export.months[0].month:02d}-01",
-            end_date=export.months[-1].reading_date,
-        )
-        if reading.get("specification") == key
-    ]
     try:
-        planned = plan_readings(export.months, existing)
+        planned = plan_readings(export.months, _datahub_existing_readings(client, cid, key, export))
     except DatahubError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -340,6 +352,24 @@ def import_datahub(
     if refused:
         typer.echo("Error: some readings were refused by EstateApp.", err=True)
         raise typer.Exit(1)
+
+    try:
+        unresolved = [
+            entry
+            for entry in plan_readings(export.months, _datahub_existing_readings(client, cid, key, export))
+            if entry.action != "skip"
+        ]
+    except DatahubError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    if unresolved:
+        typer.echo(
+            f"Error: {len(unresolved)} month(s) not stored as expected: "
+            f"{', '.join(entry.reading_date for entry in unresolved)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo(f"Verified {len(export.months)} month(s) in EstateApp.")
 
 
 @app.command("import-zaptec")
