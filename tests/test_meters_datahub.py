@@ -140,9 +140,12 @@ def _month(year: int, month: int, kwh: float) -> MonthlyConsumption:
     return MonthlyConsumption(year=year, month=month, consumption_kwh=kwh, estimated_intervals=0)
 
 
-def _reading(reading_date: str, value: float, _id: str = "r1") -> dict:
-    return {"specification": "sähkö_yhteinen_(643000000000000000)",
-            "readingDate": reading_date, "value": value, "_id": _id}
+def _reading(reading_date: str, value: float, _id: str | None = "r1") -> dict:
+    reading = {"specification": "sähkö_yhteinen_(643000000000000000)",
+               "readingDate": reading_date, "value": value}
+    if _id is not None:
+        reading["_id"] = _id
+    return reading
 
 
 def test_month_absent_from_estateapp_is_an_insert():
@@ -181,7 +184,43 @@ def test_epoch_millis_reading_dates_are_matched():
     assert planned[0].action == "skip"
 
 
-def test_existing_readings_outside_the_export_are_ignored():
+def test_unmatched_existing_reading_does_not_block_an_insert():
     planned = plan_readings([_month(2026, 2, 100.0)], [_reading("2019-01-31", 5.0)])
 
     assert [p.action for p in planned] == ["insert"]
+
+
+def test_one_cent_difference_is_a_replace():
+    planned = plan_readings([_month(2026, 1, 100.01)], [_reading("2026-01-31", 100.0)])
+
+    assert planned[0].action == "replace"
+
+
+def test_difference_at_the_tolerance_is_a_replace():
+    planned = plan_readings([_month(2026, 1, 100.0051)], [_reading("2026-01-31", 100.0)])
+
+    assert planned[0].action == "replace"
+
+
+def test_difference_just_inside_the_tolerance_is_a_skip():
+    planned = plan_readings([_month(2026, 1, 100.0049)], [_reading("2026-01-31", 100.0)])
+
+    assert planned[0].action == "skip"
+
+
+def test_unusable_reading_date_is_an_error():
+    with pytest.raises(DatahubError, match="unusable readingDate"):
+        plan_readings([_month(2026, 1, 100.0)], [_reading("not-a-date", 100.0)])
+
+
+def test_duplicate_existing_readings_for_same_date_is_an_error():
+    with pytest.raises(DatahubError, match="more than one existing reading for 2026-01-31"):
+        plan_readings(
+            [_month(2026, 1, 100.0)],
+            [_reading("2026-01-31", 100.0, _id="r1"), _reading("2026-01-31", 150.0, _id="r2")]
+        )
+
+
+def test_replace_without_reading_id_is_an_error():
+    with pytest.raises(DatahubError, match="has no id to replace"):
+        plan_readings([_month(2026, 1, 100.0)], [_reading("2026-01-31", 150.0, _id=None)])

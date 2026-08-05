@@ -119,8 +119,11 @@ def plan_readings(
     by_date: dict[str, dict] = {}
     for reading in existing:
         iso = reading_date_to_iso(reading.get("readingDate"))
-        if iso is not None:
-            by_date[iso] = reading
+        if iso is None:
+            raise DatahubError(f"existing reading has an unusable readingDate: {reading.get('readingDate')!r}")
+        if iso in by_date:
+            raise DatahubError(f"more than one existing reading for {iso}")
+        by_date[iso] = reading
 
     planned = []
     for month in months:
@@ -137,13 +140,16 @@ def plan_readings(
 
         existing_value = float(current["value"])
         same = abs(existing_value - month.consumption_kwh) < VALUE_TOLERANCE
+        existing_id = str(current.get("_id")) if current.get("_id") else None
+        if not same and existing_id is None:
+            raise DatahubError(f"existing reading for {month.reading_date} has no id to replace")
         planned.append(
             PlannedReading(
                 reading_date=month.reading_date,
                 value=month.consumption_kwh,
                 action="skip" if same else "replace",
                 existing_value=existing_value,
-                existing_id=None if same else str(current.get("_id")),
+                existing_id=None if same else existing_id,
             )
         )
     return planned

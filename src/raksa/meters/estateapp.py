@@ -55,7 +55,7 @@ def get_consumptions(
     data = client._gql("""
     query getCondoConsumptions($condominiumId: ID!, $category: String, $startDate: String!, $endDate: String!) {
         getCondoConsumptions(condominiumId: $condominiumId, category: $category, startDate: $startDate, endDate: $endDate) {
-            specification readingDate value
+            _id specification readingDate value
         }
     }
     """, {
