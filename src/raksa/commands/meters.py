@@ -10,12 +10,14 @@ from dotenv import find_dotenv, load_dotenv
 
 from raksa.client import EstateAppClient
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
+from raksa.meters.datahub import DatahubError, plan_readings, read_export
 from raksa.meters.estateapp import (
     ensure_meters_exist,
     get_consumption_summary,
     get_consumptions,
     label_to_key,
     reading_date_to_iso,
+    replace_reading,
     submit_readings,
 )
 from raksa.meters.fmi import fetch_monthly_temperatures
@@ -29,6 +31,7 @@ ZAPTEC_USERNAME_ENV = "RAKSA_ZAPTEC_USERNAME"
 ZAPTEC_PASSWORD_ENV = "RAKSA_ZAPTEC_PASSWORD"
 ZAPTEC_INSTALLATION_ID_ENV = "RAKSA_ZAPTEC_INSTALLATION_ID"
 ZAPTEC_LOOKBACK_DAYS_ENV = "RAKSA_ZAPTEC_SYNC_LOOKBACK_DAYS"
+DATAHUB_METER_LABEL = "Sähkö yhteinen ({gsrn})"
 
 
 def _get_client() -> EstateAppClient:
@@ -242,6 +245,99 @@ def sync_zaptec(
     refused = int(result.get("refused", 0))
     typer.echo(f"  Submitted {len(api_readings)} reading(s) (inserted={inserted}, refused={refused})")
     if refused > 0:
+        typer.echo("Error: some readings were refused by EstateApp.", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("import-datahub")
+def import_datahub(
+    csv_path: Annotated[Path, typer.Argument(help="Fingrid Datahub consumption export (CSV)")],
+    condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
+    submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
+):
+    """Import monthly electricity consumption from a Fingrid Datahub export."""
+    cid = _get_condo_id(condo_id)
+
+    try:
+        export = read_export(csv_path)
+    except DatahubError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if export.incomplete:
+        typer.echo(f"Skipping {len(export.incomplete)} incomplete month(s): {', '.join(export.incomplete)}")
+
+    if not export.months:
+        typer.echo("No complete months in export.")
+        return
+
+    label = DATAHUB_METER_LABEL.format(gsrn=export.gsrn)
+    key = label_to_key(label)
+    client = _get_client()
+
+    existing = [
+        reading
+        for reading in get_consumptions(
+            client,
+            cid,
+            start_date=f"{export.months[0].year}-{export.months[0].month:02d}-01",
+            end_date=export.months[-1].reading_date,
+        )
+        if reading.get("specification") == key
+    ]
+    try:
+        planned = plan_readings(export.months, existing)
+    except DatahubError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"\n{label} -> {key}\n")
+    for entry, month in zip(planned, export.months):
+        detail = ""
+        if entry.action == "replace":
+            detail = f"  (was {entry.existing_value:.2f} -> {entry.value:.2f})"
+        if month.estimated_intervals:
+            detail += f"  [{month.estimated_intervals} interval(s) not marked OK]"
+        typer.echo(f"  {entry.reading_date}  {entry.value:>10.2f} kWh  {entry.action}{detail}")
+
+    inserts = [entry for entry in planned if entry.action == "insert"]
+    replacements = [entry for entry in planned if entry.action == "replace"]
+    skips = [entry for entry in planned if entry.action == "skip"]
+    typer.echo(f"\n{len(inserts)} insert, {len(skips)} skip, {len(replacements)} replace")
+
+    if not submit:
+        typer.echo("\nDry-run mode. Pass --submit to actually import.")
+        return
+
+    if not inserts and not replacements:
+        typer.echo("Nothing to submit.")
+        return
+
+    typer.echo("\nEnsuring meter exists...")
+    ensure_meters_exist(client, cid, [label], category="electricity")
+
+    def _reading(entry) -> dict:
+        return {
+            "category": "electricity",
+            "specification": key,
+            "readingDate": entry.reading_date,
+            "value": entry.value,
+            "type": "usual",
+        }
+
+    refused = 0
+    for entry in replacements:
+        typer.echo(f"Replacing {entry.reading_date}: {entry.existing_value:.2f} -> {entry.value:.2f}")
+        result = replace_reading(client, cid, entry.existing_id, _reading(entry))
+        refused += int(result.get("refused", 0))
+
+    if inserts:
+        typer.echo(f"Submitting {len(inserts)} reading(s)...")
+        result = submit_readings(client, cid, [_reading(entry) for entry in inserts])
+        refused += int(result.get("refused", 0))
+        typer.echo(f"  inserted={result.get('inserted', 0)}, refused={result.get('refused', 0)}")
+
+    if refused:
         typer.echo("Error: some readings were refused by EstateApp.", err=True)
         raise typer.Exit(1)
 

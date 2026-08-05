@@ -2,9 +2,14 @@ import datetime
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from raksa.cli import app
+from raksa.commands import meters as meters_cmd
 from raksa.meters import estateapp
 from raksa.meters.datahub import DatahubError, MonthlyConsumption, read_export, plan_readings
+
+runner = CliRunner()
 
 GSRN = "643000000000000000"
 HEADER = "MeteringPointGSRN;Product Type;Resolution;Unit Type;Reading Type;Start Time;Quantity;Quality"
@@ -242,3 +247,153 @@ def test_replace_reading_updates_in_place(monkeypatch):
 
     assert result == {"inserted": 1, "refused": 0}
     assert sent["readings"] == [dict(reading, _id="abc123")]
+
+
+def _six_hundred_hours(path: Path):
+    """A complete February 2026 at 1 kWh/hour."""
+    _write_csv(path, _steps("2026-01-31T22:00:00Z", 672, "PT1H", "1,000000"))
+
+
+def _stub_estateapp(monkeypatch, existing: list[dict]):
+    calls = {"submitted": [], "replaced": [], "window": None, "labels": None}
+
+    def _get_consumptions(_client, _condo_id, start_date, end_date, **_kwargs):
+        calls["window"] = (start_date, end_date)
+        return list(existing)
+
+    def _ensure(_client, _cid, labels, **_kwargs):
+        calls["labels"] = list(labels)
+        return {label: meters_cmd.label_to_key(label) for label in labels}
+
+    monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
+    monkeypatch.setattr(meters_cmd, "get_consumptions", _get_consumptions)
+    monkeypatch.setattr(meters_cmd, "ensure_meters_exist", _ensure)
+    monkeypatch.setattr(meters_cmd, "submit_readings",
+                        lambda _c, _cid, readings: calls["submitted"].extend(readings)
+                        or {"inserted": len(readings), "refused": 0})
+    monkeypatch.setattr(meters_cmd, "replace_reading",
+                        lambda _c, _cid, cid, reading: calls["replaced"].append((cid, reading))
+                        or {"inserted": 1, "refused": 0})
+    return calls
+
+
+def test_import_datahub_dry_run_submits_nothing(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    calls = _stub_estateapp(monkeypatch, [])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path), "--condo-id", "condo-1"])
+
+    assert result.exit_code == 0
+    assert "2026-02-28" in result.output
+    assert "insert" in result.output
+    assert "Dry-run mode" in result.output
+    assert calls["submitted"] == []
+    assert calls["replaced"] == []
+
+
+def test_import_datahub_submits_inserts(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    calls = _stub_estateapp(monkeypatch, [])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 0
+    assert calls["labels"] == ["Sähkö yhteinen (643000000000000000)"]
+    assert calls["submitted"] == [{
+        "category": "electricity",
+        "specification": "sähkö_yhteinen_(643000000000000000)",
+        "readingDate": "2026-02-28",
+        "value": 672.0,
+        "type": "usual",
+    }]
+    assert calls["window"] == ("2026-02-01", "2026-02-28")
+
+
+def test_import_datahub_replaces_a_differing_value(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    calls = _stub_estateapp(monkeypatch, [
+        {"specification": "sähkö_yhteinen_(643000000000000000)",
+         "readingDate": "2026-02-28", "value": 999.0, "_id": "abc123"},
+    ])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 0
+    assert "999.00 -> 672.00" in result.output
+    assert calls["submitted"] == []
+    assert len(calls["replaced"]) == 1
+    consumption_id, reading = calls["replaced"][0]
+    assert consumption_id == "abc123"
+    assert reading["value"] == 672.0
+
+
+def test_import_datahub_skips_matching_value(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    calls = _stub_estateapp(monkeypatch, [
+        {"specification": "sähkö_yhteinen_(643000000000000000)",
+         "readingDate": "2026-02-28", "value": 672.0, "_id": "abc123"},
+    ])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path),
+                                 "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 0
+    assert calls["submitted"] == []
+    assert calls["replaced"] == []
+
+
+def test_import_datahub_reports_incomplete_months(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _write_csv(csv_path, _steps("2026-01-31T22:00:00Z", 100, "PT1H", "1,000000"))
+    _stub_estateapp(monkeypatch, [])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path), "--condo-id", "condo-1"])
+
+    assert result.exit_code == 0
+    assert "2026-02" in result.output
+    assert "incomplete" in result.output
+    assert "No complete months" in result.output
+
+
+def test_import_datahub_reports_parse_errors(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    csv_path.write_text("﻿" + HEADER + "\n", encoding="utf-8")
+    _stub_estateapp(monkeypatch, [])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path), "--condo-id", "condo-1"])
+
+    assert result.exit_code == 1
+    assert "no rows" in result.output
+
+
+def test_import_datahub_reports_estimated_intervals(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    rows = _steps("2026-01-31T22:00:00Z", 671, "PT1H", "1,000000")
+    rows += _steps("2026-02-28T21:00:00Z", 1, "PT1H", "1,000000", quality="QM")
+    _write_csv(csv_path, rows)
+    _stub_estateapp(monkeypatch, [])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path), "--condo-id", "condo-1"])
+
+    assert result.exit_code == 0
+    assert "1 interval(s) not marked OK" in result.output
+
+
+def test_import_datahub_reports_classification_errors(tmp_path, monkeypatch):
+    csv_path = tmp_path / "export.csv"
+    _six_hundred_hours(csv_path)
+    _stub_estateapp(monkeypatch, [
+        {"specification": "sähkö_yhteinen_(643000000000000000)",
+         "readingDate": "not-a-date", "value": 1.0, "_id": "abc123"},
+    ])
+
+    result = runner.invoke(app, ["meters", "import-datahub", str(csv_path), "--condo-id", "condo-1"])
+
+    assert result.exit_code == 1
+    assert "unusable readingDate" in result.output
