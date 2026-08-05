@@ -51,10 +51,17 @@ MeteringPointGSRN;Product Type;Resolution;Unit Type;Reading Type;Start Time;Quan
 ```
 
 - `Start Time` is UTC. `2025-12-31T22:00:00Z` is 1 Jan 2026 00:00 in Helsinki.
-- `Resolution` is an ISO 8601 duration; observed `PT15M`, and the portal can also produce `PT1H`
-  and `P1D`. Summing is resolution-independent, so all three parse the same way.
+- `Resolution` is an ISO 8601 duration. A single export mixes them: a six-year export contains
+  24693 `PT1H` rows for the older years and 111488 `PT15M` rows for the newer ones, so one month can
+  hold both. Summing is resolution-independent, and coverage-based completeness (below) tolerates the
+  switchover; counting expected intervals per month would not.
 - `Quantity` is kWh for the interval, not a meter register value.
-- `Quality` observed as `OK` throughout.
+- `Quality` observed as `OK` throughout six years.
+
+Exporting the point's sales agreement and its grid agreement yields byte-identical files. For a
+consumption-only point there is one measured series at the accounting point, which both the retailer
+and the DSO bill against; the agreement being viewed does not change it. So bought and transferred
+energy need no reconciliation, and either export is the same input.
 
 ## Aggregation
 
@@ -105,10 +112,22 @@ blocks are left alone; this command talks only to EstateApp.
 
 ## Current state
 
-The meter holds readings through 2026-01-31. A Jan 2026 export sums to 1227.44 kWh, which is exactly
-the value already stored -- the invoices quote this same meter, so replacement is expected to be rare
-and the immediate effect is filling Feb-Jul 2026, which EstateApp is missing. Datahub holds history
-further back than 2026, so a wider export can backfill earlier years.
+Datahub holds hourly data from 2020-08-06 onward. A full export aggregates to 73 months, of which 71
+are complete; 2020-08 is dropped because the export begins on the 6th, and the current month because
+it is partial.
+
+Classified against the 63 readings EstateApp holds for this meter:
+
+- 61 skip -- the stored invoice-derived value matches the metered value to the cent
+- 8 insert -- 2020-09 and 2020-10, which predate the invoice series, plus 2026-02 through 2026-07
+- 2 replace -- 2022-03 (822.92 -> 778.03) and 2022-04 (703.81 -> 611.05)
+
+Every EstateApp month is covered by a complete Datahub month, so no stored reading is left stranded.
+
+The two 2022 disagreements do not offset each other and their neighbouring months match exactly, so
+they are not an invoice period shifted across a month boundary; the invoices for those months look
+estimated or adjusted. Metered wins, but the importer must show the before and after values so a
+disagreement like this is visible rather than silently applied.
 
 ## Errors and edge cases
 
