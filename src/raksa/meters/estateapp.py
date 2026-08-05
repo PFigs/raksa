@@ -1,4 +1,5 @@
 """EstateApp consumption meter operations."""
+import datetime
 import re
 
 from raksa.client import EstateAppClient
@@ -41,6 +42,45 @@ def get_consumption_summary(client: EstateAppClient, condo_id: str) -> list[dict
     }
     """, {"condominiumId": condo_id})
     return data.get("consumptionMonitoringOfCodominiums", [])
+
+
+def get_consumptions(
+    client: EstateAppClient,
+    condo_id: str,
+    start_date: str,
+    end_date: str,
+    category: str = "electricity",
+) -> list[dict]:
+    """Get consumption readings in a date window. Dates are `YYYY-MM-DD`, both inclusive."""
+    data = client._gql("""
+    query getCondoConsumptions($condominiumId: ID!, $category: String, $startDate: String!, $endDate: String!) {
+        getCondoConsumptions(condominiumId: $condominiumId, category: $category, startDate: $startDate, endDate: $endDate) {
+            specification readingDate value
+        }
+    }
+    """, {
+        "condominiumId": condo_id,
+        "category": category,
+        "startDate": start_date,
+        "endDate": end_date,
+    })
+    return data.get("getCondoConsumptions") or []
+
+
+def reading_date_to_iso(value) -> str | None:
+    """Normalize a `readingDate` (epoch ms or ISO string) to `YYYY-MM-DD`."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if isinstance(value, (int, float)) or text.isdigit():
+        moment = datetime.datetime.fromtimestamp(int(float(text)) / 1000, tz=datetime.timezone.utc)
+        return moment.date().isoformat()
+    try:
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
 
 
 def ensure_meters_exist(

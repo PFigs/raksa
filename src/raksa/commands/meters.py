@@ -1,16 +1,34 @@
+import csv
+import datetime
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 
-from raksa.client import EstateAppClient, EstateAppError
+from raksa.client import EstateAppClient
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
-from raksa.meters.zaptec import read_all_reports, read_usage_report
+from raksa.meters.estateapp import (
+    ensure_meters_exist,
+    get_consumption_summary,
+    get_consumptions,
+    label_to_key,
+    reading_date_to_iso,
+    submit_readings,
+)
 from raksa.meters.fmi import fetch_monthly_temperatures
 from raksa.meters.readings import load_readings
-from raksa.meters.estateapp import ensure_meters_exist, submit_readings, get_consumption_summary
+from raksa.meters.zaptec import read_all_reports, read_usage_report
+from raksa.meters.zaptec_live import ZaptecSession, fetch_archived_sessions
 
 app = typer.Typer(help="Consumption meter management", no_args_is_help=True)
+
+ZAPTEC_USERNAME_ENV = "RAKSA_ZAPTEC_USERNAME"
+ZAPTEC_PASSWORD_ENV = "RAKSA_ZAPTEC_PASSWORD"
+ZAPTEC_INSTALLATION_ID_ENV = "RAKSA_ZAPTEC_INSTALLATION_ID"
+ZAPTEC_LOOKBACK_DAYS_ENV = "RAKSA_ZAPTEC_SYNC_LOOKBACK_DAYS"
 
 
 def _get_client() -> EstateAppClient:
@@ -28,6 +46,204 @@ def _get_condo_id(condo_id: str | None) -> str:
         typer.echo("Error: --condo-id required (or set RAKSA_CONDO_ID)", err=True)
         raise typer.Exit(1)
     return resolved
+
+
+def _parse_utc_datetime(value: str, source: str) -> datetime.datetime:
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        typer.echo(f"Error: invalid datetime in {source}: {value}", err=True)
+        raise typer.Exit(1)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _resolve_lookback_days(lookback_days: int | None) -> int:
+    if lookback_days is not None:
+        if lookback_days < 1:
+            typer.echo("Error: --lookback-days must be greater than 0", err=True)
+            raise typer.Exit(1)
+        return lookback_days
+
+    env_val = os.environ.get(ZAPTEC_LOOKBACK_DAYS_ENV)
+    if not env_val:
+        return 7
+    try:
+        parsed = int(env_val)
+    except ValueError:
+        typer.echo(f"Error: {ZAPTEC_LOOKBACK_DAYS_ENV} must be an integer", err=True)
+        raise typer.Exit(1)
+    if parsed < 1:
+        typer.echo(f"Error: {ZAPTEC_LOOKBACK_DAYS_ENV} must be greater than 0", err=True)
+        raise typer.Exit(1)
+    return parsed
+
+
+def _resolve_zaptec_credentials() -> tuple[str, str]:
+    load_dotenv(dotenv_path=find_dotenv(usecwd=True))
+
+    username = os.environ.get(ZAPTEC_USERNAME_ENV) or os.environ.get("ZAPTEC_USERNAME")
+    password = os.environ.get(ZAPTEC_PASSWORD_ENV) or os.environ.get("ZAPTEC_PASSWORD")
+
+    if not username:
+        typer.echo(
+            f"Error: missing {ZAPTEC_USERNAME_ENV} (or ZAPTEC_USERNAME)",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not password:
+        typer.echo(
+            f"Error: missing {ZAPTEC_PASSWORD_ENV} (or ZAPTEC_PASSWORD)",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return username, password
+
+
+def _resolve_installation_id(installation_id: str | None) -> str:
+    resolved = installation_id or os.environ.get(ZAPTEC_INSTALLATION_ID_ENV) or os.environ.get("ZAPTEC_INSTALLATION_ID")
+    if not resolved:
+        typer.echo(
+            f"Error: pass --installation-id or set {ZAPTEC_INSTALLATION_ID_ENV} (or ZAPTEC_INSTALLATION_ID)",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return resolved
+
+
+def _reading_key(specification: str, reading_date: str, value: float) -> tuple[str, str, float]:
+    return specification, reading_date, round(value, 3)
+
+
+def _select_new_sessions(
+    client: EstateAppClient,
+    condo_id: str,
+    sessions: list[ZaptecSession],
+) -> list[ZaptecSession]:
+    """Drop sessions already imported, matching them against EstateApp readings."""
+    dates = sorted({session.ended_at.date() for session in sessions})
+    existing = get_consumptions(
+        client,
+        condo_id,
+        start_date=dates[0].isoformat(),
+        end_date=dates[-1].isoformat(),
+    )
+
+    unmatched: Counter = Counter()
+    for reading in existing:
+        reading_date = reading_date_to_iso(reading.get("readingDate"))
+        value = reading.get("value")
+        if reading_date is None or value is None:
+            continue
+        unmatched[_reading_key(str(reading.get("specification")), reading_date, float(value))] += 1
+
+    new_sessions = []
+    for session in sessions:
+        key = _reading_key(
+            label_to_key(session.charger_label),
+            session.ended_at.date().isoformat(),
+            session.energy_kwh,
+        )
+        if unmatched[key]:
+            unmatched[key] -= 1
+            continue
+        new_sessions.append(session)
+    return new_sessions
+
+
+def _write_sync_csv(csv_path: Path, sessions: list[ZaptecSession]):
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["date", "meter", "kwh"])
+        writer.writerows(
+            [
+                session.ended_at.date().isoformat(),
+                session.charger_label,
+                f"{session.energy_kwh:.3f}",
+            ]
+            for session in sessions
+        )
+
+
+@app.command("sync-zaptec")
+def sync_zaptec(
+    condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
+    installation_id: Annotated[str | None, typer.Option("--installation-id", help=f"Zaptec installation UUID (or set {ZAPTEC_INSTALLATION_ID_ENV})")] = None,
+    submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
+    dry_run_csv: Annotated[Path | None, typer.Option("--dry-run-csv", help="Write dry-run output as CSV (date,meter,kwh)")] = None,
+    since: Annotated[str | None, typer.Option("--since", help="Override sync start timestamp (ISO 8601)")] = None,
+    lookback_days: Annotated[int | None, typer.Option("--lookback-days", help=f"Sync window length in days (or set {ZAPTEC_LOOKBACK_DAYS_ENV})")] = None,
+    page_size: Annotated[int, typer.Option("--page-size", min=1, max=200, help="Zaptec API page size")] = 100,
+    include_disabled: Annotated[bool, typer.Option("--include-disabled", help="Include disabled objects in Zaptec response")] = False,
+):
+    """Sync Zaptec archived charging sessions into EstateApp meters."""
+    cid = _get_condo_id(condo_id)
+    username, password = _resolve_zaptec_credentials()
+    resolved_installation_id = _resolve_installation_id(installation_id)
+    resolved_lookback_days = _resolve_lookback_days(lookback_days)
+
+    if since:
+        sync_start = _parse_utc_datetime(since, "--since")
+    else:
+        sync_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=resolved_lookback_days)
+
+    typer.echo(f"Fetching Zaptec sessions since {sync_start.isoformat()}...")
+    sessions = fetch_archived_sessions(
+        username=username,
+        password=password,
+        since=sync_start,
+        installation_id=resolved_installation_id,
+        page_size=page_size,
+        include_disabled=include_disabled,
+    )
+    client = _get_client()
+    new_sessions = _select_new_sessions(client, cid, sessions) if sessions else []
+
+    if dry_run_csv is not None:
+        _write_sync_csv(dry_run_csv, new_sessions)
+        typer.echo(f"Wrote dry-run CSV: {dry_run_csv}")
+
+    if not new_sessions:
+        typer.echo("No new sessions found.")
+        return
+
+    typer.echo(f"Found {len(new_sessions)} new session(s):\n")
+    for session in new_sessions:
+        ended_at = session.ended_at.astimezone(datetime.timezone.utc).isoformat()
+        typer.echo(
+            f"  {session.charger_label:16s}  {ended_at}  {session.energy_kwh:>10.3f} kWh"
+        )
+
+    if not submit:
+        typer.echo("\nDry-run mode. Pass --submit to actually import.")
+        return
+
+    charger_labels = sorted({session.charger_label for session in new_sessions})
+
+    typer.echo("\nEnsuring meters exist...")
+    meter_keys = ensure_meters_exist(client, cid, charger_labels, category="electricity")
+
+    typer.echo("Submitting consumption data...")
+    api_readings = [
+        {
+            "category": "electricity",
+            "specification": meter_keys[session.charger_label],
+            "readingDate": session.ended_at.date().isoformat(),
+            "value": session.energy_kwh,
+            "type": "usual",
+        }
+        for session in new_sessions
+    ]
+    result = submit_readings(client, cid, api_readings)
+
+    inserted = int(result.get("inserted", 0))
+    refused = int(result.get("refused", 0))
+    typer.echo(f"  Submitted {len(api_readings)} reading(s) (inserted={inserted}, refused={refused})")
+    if refused > 0:
+        typer.echo("Error: some readings were refused by EstateApp.", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("import-zaptec")
