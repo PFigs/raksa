@@ -69,10 +69,12 @@ Interval quantities are summed into Helsinki-time calendar months. Timestamps ar
 transitions fall out correctly: in the sample, March 2026 has 2972 intervals (2976 - 4, the hour lost
 to spring forward) and the only non-15-minute step in the file is that jump.
 
-A month is emitted only when the file covers it completely: the earliest interval must start at or
-before the month's first instant, and the last interval must end at or after the month's last
-instant. This drops the partial current month (in the sample, August 2026 at 113.74 kWh over 416
-intervals) without needing to count expected intervals per resolution.
+A month is emitted only when the file covers it completely: the summed duration of the month's
+intervals must equal the month's true span in UTC (743 hours for March 2026, 672 for February). This
+drops the partial current month (in the sample, August 2026 at 113.74 kWh over 416 intervals) and
+also catches a gap in the middle of a month, which comparing only the earliest and latest timestamps
+cannot see. Summing durations needs no per-resolution expected-interval count, so it tolerates a file
+that mixes `PT1H` and `PT15M` within one month.
 
 Monthly values are rounded to 2 decimals, matching the existing readings.
 

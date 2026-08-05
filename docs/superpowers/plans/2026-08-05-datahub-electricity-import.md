@@ -231,8 +231,7 @@ def read_export(file_path: Path) -> ExportSummary:
     """Aggregate a Datahub export into complete Helsinki-time calendar months."""
     totals: dict[tuple[int, int], float] = defaultdict(float)
     estimated: dict[tuple[int, int], int] = defaultdict(int)
-    covered_from: dict[tuple[int, int], datetime.datetime] = {}
-    covered_to: dict[tuple[int, int], datetime.datetime] = {}
+    covered: dict[tuple[int, int], datetime.timedelta] = defaultdict(datetime.timedelta)
     points: set[str] = set()
 
     with file_path.open(newline="", encoding="utf-8-sig") as f:
@@ -250,15 +249,13 @@ def read_export(file_path: Path) -> ExportSummary:
                 raise DatahubError(f"unknown resolution: {row['Resolution']}")
 
             start = datetime.datetime.fromisoformat(row["Start Time"].replace("Z", "+00:00"))
-            end = start + step
             local = start.astimezone(HELSINKI)
             key = (local.year, local.month)
 
             totals[key] += float(row["Quantity"].replace(",", "."))
             if row["Quality"] != "OK":
                 estimated[key] += 1
-            covered_from[key] = min(covered_from.get(key, start), start)
-            covered_to[key] = max(covered_to.get(key, end), end)
+            covered[key] += step
 
     if not points:
         raise DatahubError(f"no rows in export: {file_path}")
@@ -267,7 +264,7 @@ def read_export(file_path: Path) -> ExportSummary:
     incomplete = []
     for key in sorted(totals):
         month_start, month_end = _month_bounds_utc(*key)
-        if covered_from[key] <= month_start and covered_to[key] >= month_end:
+        if covered[key] == month_end - month_start:
             months.append(
                 MonthlyConsumption(
                     year=key[0],
