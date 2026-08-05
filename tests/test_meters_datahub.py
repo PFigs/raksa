@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from raksa.meters import estateapp
 from raksa.meters.datahub import DatahubError, MonthlyConsumption, read_export, plan_readings
 
 GSRN = "643000000000000000"
@@ -224,3 +225,20 @@ def test_duplicate_existing_readings_for_same_date_is_an_error():
 def test_replace_without_reading_id_is_an_error():
     with pytest.raises(DatahubError, match="has no id to replace"):
         plan_readings([_month(2026, 1, 100.0)], [_reading("2026-01-31", 150.0, _id=None)])
+
+
+def test_replace_reading_updates_in_place(monkeypatch):
+    sent = {}
+
+    def fake_submit_readings(_client, _condo_id, readings):
+        sent["readings"] = readings
+        return {"inserted": 1, "refused": 0}
+
+    monkeypatch.setattr(estateapp, "submit_readings", fake_submit_readings)
+
+    reading = {"category": "electricity", "specification": "k", "readingDate": "2022-03-31",
+               "value": 778.03, "type": "usual"}
+    result = estateapp.replace_reading(object(), "condo-1", "abc123", reading)
+
+    assert result == {"inserted": 1, "refused": 0}
+    assert sent["readings"] == [dict(reading, _id="abc123")]

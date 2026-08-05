@@ -128,3 +128,23 @@ def submit_readings(
     }
     """, {"condominiumId": condo_id, "consumptionInput": readings})
     return data["editConsumptionMonitoring"]
+
+
+def remove_reading(client: EstateAppClient, consumption_id: str) -> bool:
+    """Delete a single consumption reading."""
+    data = client._gql("""
+    mutation removeConsumptionMonitoring($consumptionId: ID!) {
+        removeConsumptionMonitoring(consumptionId: $consumptionId)
+    }
+    """, {"consumptionId": consumption_id})
+    return bool(data.get("removeConsumptionMonitoring"))
+
+
+def replace_reading(
+    client: EstateAppClient,
+    condo_id: str,
+    consumption_id: str,
+    reading: dict,
+) -> dict:
+    """Overwrite an existing consumption reading with a new value."""
+    return submit_readings(client, condo_id, [dict(reading, _id=consumption_id)])
