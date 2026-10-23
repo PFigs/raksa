@@ -4,6 +4,7 @@ from raksa.commands.auth import app as auth_app
 from raksa.commands.renovations import app as renovations_app
 from raksa.commands.faults import app as faults_app
 from raksa.commands.meters import app as meters_app
+from raksa.commands.invoices import app as invoices_app
 
 app = typer.Typer(
     name="raksa",
@@ -14,3 +15,4 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(renovations_app, name="renovations")
 app.add_typer(faults_app, name="faults")
 app.add_typer(meters_app, name="meters")
+app.add_typer(invoices_app, name="invoices")
