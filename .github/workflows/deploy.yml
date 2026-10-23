@@ -3,6 +3,8 @@ name: Test and deploy
 on:
   push:
     branches: [main]
+    # Only changes that alter the image deploy; use apollo-office's manual run for anything else.
+    paths: ["src/**", "tests/**", "pyproject.toml", "uv.lock", "Dockerfile"]
 
 permissions:
   contents: read
