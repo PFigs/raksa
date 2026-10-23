@@ -34,6 +34,7 @@ def test_sign_in_through_huoneistotieto_returns_the_estateapp_token():
     assert token == "ea-token"
     assert seen["login"]["userNameOrEmailAddress"] == "user@example.com"
     assert seen["login"]["password"] == "secret"
+    assert seen["login"]["application"] == "app"
     assert seen["link_auth"] == "Bearer ht-token"
     assert seen["link_params"] == {"officeId": "131", "condominiumId": "206"}
     assert seen["sign_in"] == {"encryptedData": "abc/def+g", "source": "htf"}

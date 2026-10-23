@@ -19,6 +19,9 @@ def _huoneistotieto_token(login: HuoneistotietoLogin, http: httpx.Client) -> str
             "userNameOrEmailAddress": login.email,
             "password": login.password,
             "rememberClient": False,
+            # The Huoneistotieto login page sends these; without "app" the login is refused.
+            "application": "app",
+            "keepLoggedInDevice": "",
         },
     )
     if not response.is_success:
