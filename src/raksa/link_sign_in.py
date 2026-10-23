@@ -22,8 +22,17 @@ def _huoneistotieto_token(login: HuoneistotietoLogin, http: httpx.Client) -> str
         },
     )
     if not response.is_success:
-        raise LinkSignInError(f"Huoneistotieto login failed with HTTP {response.status_code}")
+        raise LinkSignInError(f"Huoneistotieto login failed with HTTP {response.status_code}: {_error_message(response)}")
     return response.json()["result"]["accessToken"]
+
+
+def _error_message(response: httpx.Response) -> str:
+    """Return the reason that Huoneistotieto gives for a failed request."""
+    try:
+        error = response.json().get("error") or {}
+    except ValueError:
+        return response.text[:200]
+    return " ".join(part for part in (error.get("message"), error.get("details")) if part) or "no reason given"
 
 
 def _estateapp_link(login: HuoneistotietoLogin, ht_token: str, http: httpx.Client) -> str:
@@ -36,7 +45,9 @@ def _estateapp_link(login: HuoneistotietoLogin, ht_token: str, http: httpx.Clien
         headers={"Authorization": f"Bearer {ht_token}"},
     )
     if not response.is_success:
-        raise LinkSignInError(f"Huoneistotieto returned HTTP {response.status_code} for the EstateApp link")
+        raise LinkSignInError(
+            f"Huoneistotieto returned HTTP {response.status_code} for the EstateApp link: {_error_message(response)}"
+        )
     return response.json()["result"]
 
 
