@@ -214,6 +214,13 @@ def sync_zaptec(
         page_size=page_size,
         include_disabled=include_disabled,
     )
+    # EstateApp refuses a later submit for a meter and date that already holds readings,
+    # so only complete UTC days are submitted.
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    held_back = [session for session in sessions if session.ended_at.date() >= today]
+    if held_back:
+        typer.echo(f"Holding back {len(held_back)} session(s) from today until the day is complete.")
+    sessions = [session for session in sessions if session.ended_at.date() < today]
     client = _get_client()
     new_sessions = _select_new_sessions(client, cid, sessions) if sessions else []
 

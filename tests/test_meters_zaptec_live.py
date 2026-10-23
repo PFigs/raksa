@@ -258,6 +258,23 @@ def test_sync_zaptec_submit_sends_all_new_sessions(monkeypatch):
     assert calls["submitted"][0]["readingDate"] == "2026-08-02"
 
 
+def test_sync_zaptec_holds_back_sessions_from_the_current_utc_day(monkeypatch):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    yesterday = now - datetime.timedelta(days=1)
+    calls = _stub_sync(
+        monkeypatch,
+        sessions=[
+            _session("s1", "AP 01", yesterday.isoformat(), 7.5),
+            _session("s2", "AP 01", now.isoformat(), 3.25),
+        ],
+    )
+
+    result = _run("--submit")
+
+    assert result.exit_code == 0
+    assert [reading["value"] for reading in calls["submitted"]] == [7.5]
+
+
 def test_sync_zaptec_refused_readings_fail_the_run(monkeypatch):
     _stub_sync(
         monkeypatch,
