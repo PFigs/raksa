@@ -29,4 +29,4 @@ jobs:
       - name: Start the server deploy
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh workflow run deploy.yml -R vuoreksenapollo/apollo-office
+        run: gh api -X POST repos/vuoreksenapollo/apollo-office/actions/workflows/deploy.yml/dispatches -f ref=main
