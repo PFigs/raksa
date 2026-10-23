@@ -9,7 +9,8 @@ import typer
 from dotenv import find_dotenv, load_dotenv
 
 from raksa.client import EstateAppClient
-from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, RaksaConfigError
+from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, resolve_ht_login, RaksaConfigError
+from raksa.link_sign_in import LinkSignInError, sign_in_through_huoneistotieto
 from raksa.meters.datahub import DatahubError, plan_readings, read_export
 from raksa.meters.estateapp import (
     ensure_meters_exist,
@@ -35,12 +36,14 @@ DATAHUB_METER_LABEL = "Sähkö yhteinen ({gsrn})"
 
 
 def _get_client() -> EstateAppClient:
+    base_url = resolve_base_url()
     try:
-        token = resolve_token()
-    except RaksaConfigError as e:
+        ht_login = resolve_ht_login()
+        token = sign_in_through_huoneistotieto(login=ht_login, base_url=base_url) if ht_login else resolve_token()
+    except (RaksaConfigError, LinkSignInError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    return EstateAppClient(token=token, base_url=resolve_base_url())
+    return EstateAppClient(token=token, base_url=base_url)
 
 
 def _get_condo_id(condo_id: str | None) -> str:

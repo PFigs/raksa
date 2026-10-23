@@ -1,0 +1,17 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/**", "pyproject.toml", "uv.lock"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest -q

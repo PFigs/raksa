@@ -50,6 +50,27 @@ def save_token(login_token: str, user_id: str) -> Path:
     return token_file
 
 
+class HuoneistotietoLogin(BaseModel):
+    email: str
+    password: str
+    office_id: str
+    condominium_id: str
+
+
+def resolve_ht_login() -> HuoneistotietoLogin | None:
+    """Return the Huoneistotieto login, or None when RAKSA_HT_EMAIL or RAKSA_HT_PASSWORD is unset."""
+    load_dotenv(dotenv_path=find_dotenv(usecwd=True))
+    email = os.environ.get("RAKSA_HT_EMAIL")
+    password = os.environ.get("RAKSA_HT_PASSWORD")
+    if not email or not password:
+        return None
+    office_id = os.environ.get("RAKSA_HT_OFFICE_ID")
+    condominium_id = os.environ.get("RAKSA_HT_CONDOMINIUM_ID")
+    if not office_id or not condominium_id:
+        raise RaksaConfigError("RAKSA_HT_OFFICE_ID and RAKSA_HT_CONDOMINIUM_ID are required with RAKSA_HT_EMAIL")
+    return HuoneistotietoLogin(email=email, password=password, office_id=office_id, condominium_id=condominium_id)
+
+
 class HuoneistotietoConfig(BaseModel):
     token: str
     user_id: str
