@@ -554,9 +554,9 @@ def sync_bills(
 
     missing = [
         f"{label} {entry.reading_date}"
-        for label in inserts
+        for label, entries in inserts.items()
         for entry in _plan_bill_readings(client, cid, meters[label])
-        if entry.action != "skip"
+        if entry.reading_date in {submitted.reading_date for submitted in entries} and entry.action != "skip"
     ]
     if missing:
         typer.echo(f"Error: {len(missing)} reading(s) not stored as expected: {', '.join(missing)}", err=True)

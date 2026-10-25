@@ -50,6 +50,8 @@ def parse_bill(page: str) -> list[BillReading]:
     periods = [(index, match) for index, line in enumerate(lines) if (match := PERIOD_LINE.fullmatch(line))]
     if not periods:
         return []
+    if len(periods) > 1:
+        raise BillParseError(f"expected one billing period, found {[match[0] for _, match in periods]}")
     index, period = periods[0]
     kind, start, end = period.groups()
     # Balancing bills cover periods that the water estimates already hold.

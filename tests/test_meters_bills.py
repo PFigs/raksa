@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from raksa.cli import app
 from raksa.commands import meters as meters_cmd
-from raksa.meters.bills import parse_bill
+from raksa.meters.bills import BillParseError, parse_bill
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bills"
 
@@ -63,6 +63,13 @@ def test_parse_bill(fixture, expected):
     assert [reading.model_dump() for reading in readings] == expected
 
 
+def test_parse_bill_rejects_a_split_bill():
+    page = (FIXTURES / "heat.html").read_text(encoding="utf-8") + "<p>KULUTUSLASKU 16.3.2026 - 31.3.2026</p>"
+
+    with pytest.raises(BillParseError):
+        parse_bill(page)
+
+
 class _FakeHuoneistotieto:
     """Serves the bill fixtures as this year's purchase invoices, and nothing for the year before."""
 
@@ -70,7 +77,8 @@ class _FakeHuoneistotieto:
         "1_1.html": ("text/html", (FIXTURES / "heat.html").read_bytes()),
         "2_1.html": ("text/html", (FIXTURES / "grid.html").read_bytes()),
         "3_1.html": ("text/html", (FIXTURES / "water_estimate.html").read_bytes()),
-        # A second water estimate, so that the water meters get two new readings each.
+        # A year-old heat bill and water estimate, so that each meter gets a new reading next to a stored one.
+        "6_1.html": ("text/html", (FIXTURES / "heat.html").read_bytes().replace(b"2026", b"2025")),
         "4_1.html": ("text/html", (FIXTURES / "water_estimate.html").read_bytes().replace(b"2026", b"2025")),
         "5_1.pdf": ("application/pdf", b"%PDF"),
     }
@@ -86,7 +94,7 @@ class _FakeHuoneistotieto:
 
 def test_plan_readings_never_replaces(monkeypatch):
     stored = [
-        {"_id": "heat-1", "specification": "kaukolämpö_(55306988)", "readingDate": "2026-03-31", "value": 24.33},
+        {"_id": "heat-1", "specification": "kaukolämpö_(55306988)", "readingDate": "2026-03-31", "value": 24.30},
         {"specification": "sähkö_yhteinen_(643007572070390203)", "readingDate": "2026-08-31", "value": 1190.5},
     ]
     submit_calls = []
@@ -108,6 +116,8 @@ def test_plan_readings_never_replaces(monkeypatch):
     assert result.exit_code == 0, result.output
     assert sorted([(r["specification"], r["readingDate"], r["value"]) for r in readings] for readings in submit_calls) == [
         [("jätevesi_(06245559)", "2025-03-31", 150.0), ("jätevesi_(06245559)", "2026-03-31", 150.0)],
+        [("kaukolämpö_(55306988)", "2025-03-31", 24.33)],
         [("vesi_(06245559)", "2025-03-31", 150.0), ("vesi_(06245559)", "2026-03-31", 150.0)],
     ]
     assert "EstateApp has 1190.500, bill has 1201.720" in result.output
+    assert "EstateApp has 24.300, bill has 24.330" in result.output
