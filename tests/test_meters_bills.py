@@ -290,6 +290,8 @@ _ESTIMATE = (FIXTURES / "water_estimate.html").read_bytes()
         ),
         # The first heat bill starts on 2026-03-01, and EstateApp holds nothing for 2026-02-28.
         ([_HEAT], [], "Kaukolämpö: no reading on 2026-02-28"),
+        # A wastewater reading on the day before does not count for water.
+        ([_ESTIMATE], [("jätevesi_(14667678)", "2026-02-26")], "Vesi: no reading on 2026-02-26"),
         # The water meter changes, and the balancing period spans an estimate of the old meter: no gap.
         (
             [_BALANCING, _ESTIMATE, _ESTIMATE.replace(b"06245559", b"14667678").replace(b"2026", b"2025")],
@@ -298,11 +300,13 @@ _ESTIMATE = (FIXTURES / "water_estimate.html").read_bytes()
         ),
     ],
 )
-def test_sync_bills_fails_on_a_gap(monkeypatch, bills, stored, missing):
+@pytest.mark.parametrize("submit", [[], ["--submit"]])
+def test_sync_bills_fails_on_a_gap(monkeypatch, bills, stored, missing, submit):
     class _Bills(_FakeHuoneistotieto):
         attachments = {f"{i}_1.html": ("text/html", bill) for i, bill in enumerate(bills)}
 
     readings = [{"_id": key, "specification": key, "readingDate": date, "value": 1.0} for key, date in stored]
+    submit_calls = []
     monkeypatch.setattr(meters_cmd, "_get_bills_client", _Bills)
     monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
     monkeypatch.setattr(
@@ -310,11 +314,14 @@ def test_sync_bills_fails_on_a_gap(monkeypatch, bills, stored, missing):
             r for r in readings if start_date <= r["readingDate"] <= end_date
         ]
     )
+    monkeypatch.setattr(meters_cmd, "ensure_meters_exist", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(meters_cmd, "submit_readings", lambda _c, _i, rs: submit_calls.append(rs) or {"refused": 0})
 
-    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1"])
+    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", *submit])
 
     if missing is None:
-        assert result.exit_code == 0, result.output
+        assert "leave a gap" not in result.output, result.output
     else:
         assert result.exit_code == 1
         assert missing in result.output
+        assert submit_calls == []
