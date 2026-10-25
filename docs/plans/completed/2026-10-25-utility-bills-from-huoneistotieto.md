@@ -30,13 +30,12 @@
 - PDF attachments. Two utility bills in 2026 are PDFs: the 2026-02 heat bill is a scan without text, and the 2026-03
   Fortum bill repeats the kWh of the grid bill. Enter the 2026-02 heat reading once by hand with the
   `extract-consumption` skill and `raksa meters import-readings`.
-- Water balancing bills (`TASAUSLASKU`). See the decisions.
 
 ### Decisions
 
 - **Water gets the quarterly estimate as its reading**, the same way as the 2024 and 2025 data already in EstateApp.
-  Skip the balancing bills. Rejected: real readings only, because the last balancing bill covers 2024-01 to 2026-02 in
-  one value. Rejected: replace the estimates when a balancing bill arrives, because it needs delete-and-resubmit logic.
+  A balancing bill adds one correction reading (see `2026-10-25-water-balancing-bills.md`). Rejected: real readings
+  only, because the last balancing bill covers 2024-01 to 2026-02 in one value.
 - **Identify the utility by the bill content, not by the payee name.** The unit on the period line (`MWh`, `kWh`,
   `m3`) decides the utility. A bill without a `KULUTUSLASKU` or `ARVIOLASKU` period line is skipped.
 - **Electricity comes from the grid bill.** The Fortum supply bill has the same kWh and the same site ID each month,
@@ -83,14 +82,14 @@
 - **Acceptance criteria:**
   - The client lists the purchase invoice rows of a year and downloads an attachment.
   - The parser returns the utility, the meter or site ID, the period and the consumption for the heat, grid and water
-    estimate bills. It returns nothing for the Fortum bill and the balancing bill.
+    estimate bills. It returns nothing for the Fortum bill.
   - A water estimate gives two readings, one for `Vesi` and one for `Jätevesi`.
   - Readings for existing dates are skipped. A different value prints both values.
   - The command checks EstateApp after the submit, the same way as `import-datahub`.
   - `import-datahub` behaves as before with the lifted planner.
 - **Tests:**
   - `test_parse_bill` over trimmed HTML fixtures of a heat bill, a grid bill, a water estimate, a Fortum bill and a
-    balancing bill. It fails if a field is read wrong or if an ignored bill gives a reading.
+    balancing bill. It fails if a field is read wrong or if the Fortum bill gives a reading.
   - `test_plan_readings_never_replaces` fails if an existing date gets submitted again or if a difference is not
     reported.
   - `test_list_purchase_invoices` fails if the double-encoded JSON of `GetAccountingDocuments` is decoded wrong.

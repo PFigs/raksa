@@ -30,6 +30,8 @@ class BillReading(BaseModel):
     period_end: str
     consumption: float
     unit: str
+    # The real consumption of the whole period, from a water balancing bill.
+    balancing: bool = False
 
 
 def _text_lines(page: str) -> list[str]:
@@ -38,6 +40,11 @@ def _text_lines(page: str) -> list[str]:
     text = html.unescape(re.sub(r"<[^>]+>", "", page))
     lines = (re.sub(r"\s+", " ", line).strip() for line in text.split("\n"))
     return [line for line in lines if line]
+
+
+def _quantity(line: str) -> tuple[float, str] | None:
+    match = QUANTITY_LINE.fullmatch(line)
+    return (float(match[1].replace(" ", "").replace(",", ".")), match[2]) if match else None
 
 
 def _iso_date(finnish_date: str) -> str:
@@ -54,17 +61,14 @@ def parse_bill(page: str) -> list[BillReading]:
         raise BillParseError(f"expected one billing period, found {[match[0] for _, match in periods]}")
     index, period = periods[0]
     kind, start, end = period.groups()
-    # Balancing bills cover periods that the water estimates already hold.
-    if kind == "TASAUSLASKU":
-        return []
-
-    quantities = {
-        (float(match[1].replace(" ", "").replace(",", ".")), match[2])
-        for line in lines[index + 1:]
-        if (match := QUANTITY_LINE.fullmatch(line))
-    }
-    if len(quantities) != 1:
-        raise BillParseError(f"expected one consumption after '{period[0]}', found {sorted(quantities)}")
+    balancing = kind == "TASAUSLASKU"
+    if balancing:
+        # The other quantity rows of a balancing bill split the period by price.
+        quantities = {_quantity(lines[i + 1]) for i, line in enumerate(lines[:-1]) if line == "Kulutus:"}
+    else:
+        quantities = {quantity for line in lines[index + 1:] if (quantity := _quantity(line))}
+    if len(quantities) != 1 or None in quantities:
+        raise BillParseError(f"expected one consumption after '{period[0]}', found {sorted(quantities, key=str)}")
     consumption, unit = quantities.pop()
     utility, meter_line, labels = UTILITIES[unit]
 
@@ -82,6 +86,7 @@ def parse_bill(page: str) -> list[BillReading]:
             period_end=_iso_date(end),
             consumption=consumption,
             unit=unit,
+            balancing=balancing,
         )
         for label in labels
     ]
