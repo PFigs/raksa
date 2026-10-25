@@ -121,3 +121,24 @@ def test_plan_readings_never_replaces(monkeypatch):
     ]
     assert "EstateApp has 1190.500, bill has 1201.720" in result.output
     assert "EstateApp has 24.300, bill has 24.330" in result.output
+
+
+def test_sync_bills_fails_when_estateapp_stores_another_value(monkeypatch):
+    stored = []
+
+    def _submit_readings(_client, _cid, readings):
+        # EstateApp reports every reading as inserted, but keeps a different value.
+        stored.extend({"specification": r["specification"], "readingDate": r["readingDate"], "value": r["value"] + 1}
+                      for r in readings)
+        return {"inserted": len(readings), "refused": 0}
+
+    monkeypatch.setattr(meters_cmd, "_get_bills_client", _FakeHuoneistotieto)
+    monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
+    monkeypatch.setattr(meters_cmd, "get_consumptions", lambda *_args, **_kwargs: list(stored))
+    monkeypatch.setattr(meters_cmd, "ensure_meters_exist", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(meters_cmd, "submit_readings", _submit_readings)
+
+    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 1
+    assert "not stored as expected" in result.output
