@@ -464,6 +464,46 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
     return {label: sorted(dates.values(), key=lambda r: r.period_end) for label, dates in sorted(by_label.items())}
 
 
+def _correct_balancing_readings(
+    client: EstateAppClient, condo_id: str, meters: dict[str, list[BillReading]]
+) -> dict[str, list[BillReading]]:
+    """Turn each balancing reading into its real consumption minus the readings of its period, before its last day."""
+    corrected = {}
+    for label, readings in meters.items():
+        key = label_to_key(label)
+        result = []
+        for reading in readings:
+            if not reading.balancing:
+                result.append(reading)
+                continue
+            stored = [
+                (reading_date_to_iso(r.get("readingDate")), float(r["value"]))
+                for r in get_consumptions(
+                    client, condo_id, start_date=reading.period_start, end_date=reading.period_end, category=reading.utility
+                )
+                if r.get("specification") == key
+            ]
+            stored_dates = {date for date, _ in stored}
+            # The estimates and the earlier corrections that this run inserts count as well.
+            planned = [
+                (r.period_end, r.consumption)
+                for r in [r for r in readings if not r.balancing] + [r for r in result if r.balancing]
+                if r.period_end not in stored_dates
+            ]
+            counted = sum(value for date, value in stored + planned if reading.period_start <= date < reading.period_end)
+            correction = round(reading.consumption - counted, 3)
+            if correction < 0:
+                typer.echo(
+                    f"Error: {label} {reading.period_start} - {reading.period_end}: the stored readings add up to "
+                    f"{counted:.3f}, more than the real {reading.consumption:.3f}",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            result.append(reading.model_copy(update={"consumption": correction}))
+        corrected[label] = result
+    return corrected
+
+
 def _plan_bill_readings(client: EstateAppClient, condo_id: str, readings: list[BillReading]) -> list[PlannedReading]:
     """Plan one meter's bill readings. The reading date is the last day of the billing period."""
     key = label_to_key(readings[0].label)
@@ -499,6 +539,7 @@ def sync_bills(
         return
 
     client = _get_client()
+    meters = _correct_balancing_readings(client, cid, meters)
     inserts: dict[str, list[PlannedReading]] = {}
     skipped = 0
     for label, readings in meters.items():
