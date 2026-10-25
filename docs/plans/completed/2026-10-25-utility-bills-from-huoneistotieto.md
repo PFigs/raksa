@@ -97,3 +97,16 @@
 - **Model:** Opus.
 - **Constraints:** trim the fixtures to the lines the parser needs, without names, addresses or bank accounts.
   Change no behavior of the existing commands.
+
+### Task 2: The daily workflow step in apollo-office
+
+- **Goal:** the daily scheduled workflow in apollo-office runs `raksa meters sync-bills --submit` after the Zaptec
+  sync, and emails its owner when the bill step fails.
+- **Acceptance criteria:**
+  - The bill step runs even when the Zaptec step fails, and the Zaptec step runs even when the bill step fails.
+  - The step gets the Huoneistotieto secrets, including `RAKSA_HT_CONDOMINIUM_NUMBER`.
+  - A failed bill step sends an email that names the bill import, separate from the Zaptec email.
+- **Tests:** none. Check it with a manual run of the workflow after the merge.
+- **Model:** Opus.
+- **Constraints:** reuse the checkout, the uv setup and the email step of the Zaptec workflow. Do not add a second
+  workflow file.
