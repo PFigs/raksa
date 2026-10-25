@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 
 CONFIG_DIR = Path.home() / ".config" / "raksa"
+HT_CONDOMINIUM_NUMBER_ENV = "RAKSA_HT_CONDOMINIUM_NUMBER"
 
 
 class RaksaConfigError(Exception):
@@ -91,7 +92,7 @@ def resolve_ht_config(
         "RAKSA_HT_USER_ID": "user_id",
         "RAKSA_HT_OFFICE_ID": "office_id",
         "RAKSA_HT_CONDOMINIUM_ID": "condominium_id",
-        "RAKSA_HT_CONDOMINIUM_NUMBER": "condominium_number",
+        HT_CONDOMINIUM_NUMBER_ENV: "condominium_number",
     }
     values = {}
     for env_var, field in required.items():

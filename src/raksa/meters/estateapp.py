@@ -159,6 +159,7 @@ def replace_reading(
 def plan_readings(
     readings: list[tuple[str, float]],
     existing: list[dict],
+    replace_needs_id: bool = True,
 ) -> list[PlannedReading]:
     """Decide per (reading_date, value) pair whether to insert, skip or replace an EstateApp reading."""
     by_date: dict[str, dict] = {}
@@ -180,7 +181,7 @@ def plan_readings(
         existing_value = float(current["value"])
         same = abs(existing_value - value) < VALUE_TOLERANCE
         existing_id = str(current.get("_id")) if current.get("_id") else None
-        if not same and existing_id is None:
+        if not same and existing_id is None and replace_needs_id:
             raise ReadingPlanError(f"existing reading for {reading_date} has no id to replace")
         planned.append(
             PlannedReading(

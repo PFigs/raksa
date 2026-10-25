@@ -67,10 +67,12 @@ class _FakeHuoneistotieto:
     """Serves the bill fixtures as this year's purchase invoices, and nothing for the year before."""
 
     attachments = {
-        "1_1.html": ("text/html", "heat.html"),
-        "2_1.html": ("text/html", "grid.html"),
-        "3_1.html": ("text/html", "water_estimate.html"),
-        "4_1.pdf": ("application/pdf", None),
+        "1_1.html": ("text/html", (FIXTURES / "heat.html").read_bytes()),
+        "2_1.html": ("text/html", (FIXTURES / "grid.html").read_bytes()),
+        "3_1.html": ("text/html", (FIXTURES / "water_estimate.html").read_bytes()),
+        # A second water estimate, so that the water meters get two new readings each.
+        "4_1.html": ("text/html", (FIXTURES / "water_estimate.html").read_bytes().replace(b"2026", b"2025")),
+        "5_1.pdf": ("application/pdf", b"%PDF"),
     }
 
     def list_purchase_invoices(self, year: int) -> list[dict]:
@@ -79,20 +81,18 @@ class _FakeHuoneistotieto:
         return [{"maksunsaaja": "Payee", "liitteet": [name]} for name in self.attachments]
 
     def download_invoice_file(self, file_name: str) -> tuple[str, bytes]:
-        content_type, fixture = self.attachments[file_name]
-        return content_type, (FIXTURES / fixture).read_bytes() if fixture else b"%PDF"
+        return self.attachments[file_name]
 
 
 def test_plan_readings_never_replaces(monkeypatch):
     stored = [
         {"_id": "heat-1", "specification": "kaukolämpö_(55306988)", "readingDate": "2026-03-31", "value": 24.33},
-        {"_id": "grid-1", "specification": "sähkö_yhteinen_(643007572070390203)",
-         "readingDate": "2026-08-31", "value": 1190.5},
+        {"specification": "sähkö_yhteinen_(643007572070390203)", "readingDate": "2026-08-31", "value": 1190.5},
     ]
-    submitted = []
+    submit_calls = []
 
     def _submit_readings(_client, _cid, readings):
-        submitted.extend(readings)
+        submit_calls.append(readings)
         stored.extend({"specification": r["specification"], "readingDate": r["readingDate"], "value": r["value"]}
                       for r in readings)
         return {"inserted": len(readings), "refused": 0}
@@ -106,8 +106,8 @@ def test_plan_readings_never_replaces(monkeypatch):
     result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", "--submit"])
 
     assert result.exit_code == 0, result.output
-    assert sorted((r["specification"], r["readingDate"], r["value"]) for r in submitted) == [
-        ("jätevesi_(06245559)", "2026-03-31", 150.0),
-        ("vesi_(06245559)", "2026-03-31", 150.0),
+    assert sorted([(r["specification"], r["readingDate"], r["value"]) for r in readings] for readings in submit_calls) == [
+        [("jätevesi_(06245559)", "2025-03-31", 150.0), ("jätevesi_(06245559)", "2026-03-31", 150.0)],
+        [("vesi_(06245559)", "2025-03-31", 150.0), ("vesi_(06245559)", "2026-03-31", 150.0)],
     ]
     assert "EstateApp has 1190.500, bill has 1201.720" in result.output

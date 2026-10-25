@@ -10,7 +10,14 @@ import typer
 from dotenv import find_dotenv, load_dotenv
 
 from raksa.client import EstateAppClient
-from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, resolve_ht_login, RaksaConfigError
+from raksa.config import (
+    HT_CONDOMINIUM_NUMBER_ENV,
+    RaksaConfigError,
+    resolve_base_url,
+    resolve_condo_id,
+    resolve_ht_login,
+    resolve_token,
+)
 from raksa.huoneistotieto.client import HuoneistotietoClient
 from raksa.link_sign_in import LinkSignInError, huoneistotieto_token, sign_in_through_huoneistotieto
 from raksa.meters.bills import BillParseError, BillReading, parse_bill
@@ -38,7 +45,6 @@ ZAPTEC_USERNAME_ENV = "RAKSA_ZAPTEC_USERNAME"
 ZAPTEC_PASSWORD_ENV = "RAKSA_ZAPTEC_PASSWORD"
 ZAPTEC_INSTALLATION_ID_ENV = "RAKSA_ZAPTEC_INSTALLATION_ID"
 ZAPTEC_LOOKBACK_DAYS_ENV = "RAKSA_ZAPTEC_SYNC_LOOKBACK_DAYS"
-HT_CONDOMINIUM_NUMBER_ENV = "RAKSA_HT_CONDOMINIUM_NUMBER"
 
 
 def _get_client() -> EstateAppClient:
@@ -429,10 +435,12 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
         for file_name in row.get("liitteet") or []
     }
     by_label: dict[str, dict[str, BillReading]] = {}
+    not_html = 0
+    no_reading = 0
     for file_name, payee in payees.items():
         content_type, content = ht_client.download_invoice_file(file_name)
         if content_type != "text/html":
-            typer.echo(f"Warning: skipping {file_name} ({payee}): {content_type} is not read")
+            not_html += 1
             continue
         try:
             readings = parse_bill(content.decode("utf-8", errors="replace"))
@@ -440,7 +448,7 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
             typer.echo(f"Error: {file_name} ({payee}): {e}", err=True)
             raise typer.Exit(1)
         if not readings:
-            typer.echo(f"Warning: no reading in {file_name} ({payee})")
+            no_reading += 1
         for reading in readings:
             dates = by_label.setdefault(reading.label, {})
             known = dates.get(reading.period_end)
@@ -452,6 +460,7 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
                 )
                 raise typer.Exit(1)
             dates[reading.period_end] = reading
+    typer.echo(f"Read {len(payees)} attachment(s): skipped {not_html} that are not HTML, {no_reading} bill(s) give no reading.")
     return {label: sorted(dates.values(), key=lambda r: r.period_end) for label, dates in sorted(by_label.items())}
 
 
@@ -470,7 +479,8 @@ def _plan_bill_readings(client: EstateAppClient, condo_id: str, readings: list[B
         if reading.get("specification") == key
     ]
     try:
-        return plan_readings([(r.period_end, r.consumption) for r in readings], existing)
+        # sync-bills never replaces, so a stored reading without an ID is only reported.
+        return plan_readings([(r.period_end, r.consumption) for r in readings], existing, replace_needs_id=False)
     except ReadingPlanError as e:
         typer.echo(f"Error: {readings[0].label}: {e}", err=True)
         raise typer.Exit(1)
