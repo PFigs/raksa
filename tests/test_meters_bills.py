@@ -166,18 +166,21 @@ class _FakeBalancingHuoneistotieto(_FakeHuoneistotieto):
 
 
 @pytest.mark.parametrize(
-    ("stored_estimate", "expected_correction"),
+    ("stored_estimates", "expected_correction"),
     [
         # 3630 real, minus the stored 1000, minus the 150 estimate that the same run inserts.
-        (1000.0, 2480.0),
+        ([1000.0], 2480.0),
+        # Two readings stored on one date both count.
+        ([500.0, 500.0], 2480.0),
         # The estimates add up to more than the real consumption.
-        (4000.0, None),
+        ([4000.0], None),
     ],
 )
-def test_sync_bills_corrects_a_balancing_bill(monkeypatch, stored_estimate, expected_correction):
+def test_sync_bills_corrects_a_balancing_bill(monkeypatch, stored_estimates, expected_correction):
     stored = [
-        {"_id": f"{key}-1", "specification": key, "readingDate": "2024-03-31", "value": stored_estimate}
+        {"_id": f"{key}-{i}", "specification": key, "readingDate": "2024-03-31", "value": value}
         for key in ("vesi_(14667678)", "jätevesi_(14667678)")
+        for i, value in enumerate(stored_estimates)
     ]
     submit_calls = []
 
