@@ -2,7 +2,23 @@
 import datetime
 import re
 
+from pydantic import BaseModel
+
 from raksa.client import EstateAppClient
+
+VALUE_TOLERANCE = 0.005
+
+
+class ReadingPlanError(Exception):
+    pass
+
+
+class PlannedReading(BaseModel):
+    reading_date: str
+    value: float
+    action: str
+    existing_value: float | None = None
+    existing_id: str | None = None
 
 
 def label_to_key(label: str) -> str:
@@ -138,3 +154,42 @@ def replace_reading(
 ) -> dict:
     """Overwrite an existing consumption reading with a new value."""
     return submit_readings(client, condo_id, [dict(reading, _id=consumption_id)])
+
+
+def plan_readings(
+    readings: list[tuple[str, float]],
+    existing: list[dict],
+    replace_needs_id: bool = True,
+) -> list[PlannedReading]:
+    """Decide per (reading_date, value) pair whether to insert, skip or replace an EstateApp reading."""
+    by_date: dict[str, dict] = {}
+    for reading in existing:
+        iso = reading_date_to_iso(reading.get("readingDate"))
+        if iso is None:
+            raise ReadingPlanError(f"existing reading has an unusable readingDate: {reading.get('readingDate')!r}")
+        if iso in by_date:
+            raise ReadingPlanError(f"more than one existing reading for {iso}")
+        by_date[iso] = reading
+
+    planned = []
+    for reading_date, value in readings:
+        current = by_date.get(reading_date)
+        if current is None:
+            planned.append(PlannedReading(reading_date=reading_date, value=value, action="insert"))
+            continue
+
+        existing_value = float(current["value"])
+        same = abs(existing_value - value) < VALUE_TOLERANCE
+        existing_id = str(current.get("_id")) if current.get("_id") else None
+        if not same and existing_id is None and replace_needs_id:
+            raise ReadingPlanError(f"existing reading for {reading_date} has no id to replace")
+        planned.append(
+            PlannedReading(
+                reading_date=reading_date,
+                value=value,
+                action="skip" if same else "replace",
+                existing_value=existing_value,
+                existing_id=None if same else existing_id,
+            )
+        )
+    return planned

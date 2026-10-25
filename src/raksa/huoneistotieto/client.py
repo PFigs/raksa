@@ -1,4 +1,5 @@
 """Huoneistotieto.fi REST API client."""
+import base64
 import json
 from pathlib import Path
 
@@ -126,3 +127,41 @@ class HuoneistotietoClient:
             files=file_tuples,
         )
         resp.raise_for_status()
+
+    def list_purchase_invoices(self, year: int) -> list[dict]:
+        """List the purchase invoice rows of a year from the accounting documents."""
+        resp = self._http.get(
+            f"{BASE_URL}/api/services/app/Asiakirja/GetAccountingDocuments",
+            params={
+                "officeId": self._office_id,
+                "condominiumId": self._condominium_id,
+                "year": year,
+            },
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        # The document list and the rows of each document are JSON strings inside the JSON.
+        documents = json.loads(resp.json()["result"] or "[]")
+        return [
+            row
+            for document in documents
+            if document["type"] == "OSTOLASKUT"
+            for row in json.loads(document["file"]["json"])
+        ]
+
+    def download_invoice_file(self, file_name: str) -> tuple[str, bytes]:
+        """Download a purchase invoice attachment. Returns its content type and content."""
+        resp = self._http.get(
+            f"{BASE_URL}/api/services/app/Asiakirja/GetInvoiceFile",
+            params={
+                "officeId": self._office_id,
+                "condominiumNumber": self._condominium_number,
+                "fileName": file_name,
+            },
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        result = resp.json()["result"]
+        if not result or not result.get("content"):
+            raise RuntimeError(f"Huoneistotieto returned no content for {file_name}")
+        return result["contentType"], base64.b64decode(result["content"])

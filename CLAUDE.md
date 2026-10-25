@@ -22,6 +22,7 @@ src/raksa/
   meters/
     zaptec.py       - Read Zaptec EV charger Excel exports
     datahub.py      - Read Fingrid Datahub consumption exports (CSV)
+    bills.py        - Read utility consumption from Huoneistotieto e-invoices (HTML)
     estateapp.py    - EstateApp consumption meter API operations
 ```
 
@@ -37,6 +38,7 @@ raksa faults get <fault-id>                   # show fault details
 raksa faults import <dir> [--submit]          # import from hive YAML (dry-run default)
 raksa meters import-zaptec <path> [--submit]  # import EV consumption from Zaptec Excel
 raksa meters import-datahub <csv> [--submit]   # import monthly electricity from a Datahub export
+raksa meters sync-bills [--submit]            # import heat, electricity and water from Huoneistotieto bills
 raksa meters summary                          # show consumption totals
 ```
 

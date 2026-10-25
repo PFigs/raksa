@@ -7,7 +7,8 @@ from typer.testing import CliRunner
 from raksa.cli import app
 from raksa.commands import meters as meters_cmd
 from raksa.meters import estateapp
-from raksa.meters.datahub import DatahubError, MonthlyConsumption, read_export, plan_readings
+from raksa.meters.datahub import DatahubError, MonthlyConsumption, read_export
+from raksa.meters.estateapp import ReadingPlanError, plan_readings
 
 runner = CliRunner()
 
@@ -142,8 +143,8 @@ def test_export_without_rows_is_an_error(tmp_path):
         read_export(csv_path)
 
 
-def _month(year: int, month: int, kwh: float) -> MonthlyConsumption:
-    return MonthlyConsumption(year=year, month=month, consumption_kwh=kwh, estimated_intervals=0)
+def _month(year: int, month: int, kwh: float) -> tuple[str, float]:
+    return MonthlyConsumption(year=year, month=month, consumption_kwh=kwh, estimated_intervals=0).reading_date, kwh
 
 
 def _reading(reading_date: str, value: float, _id: str | None = "r1") -> dict:
@@ -215,12 +216,12 @@ def test_difference_just_inside_the_tolerance_is_a_skip():
 
 
 def test_unusable_reading_date_is_an_error():
-    with pytest.raises(DatahubError, match="unusable readingDate"):
+    with pytest.raises(ReadingPlanError, match="unusable readingDate"):
         plan_readings([_month(2026, 1, 100.0)], [_reading("not-a-date", 100.0)])
 
 
 def test_duplicate_existing_readings_for_same_date_is_an_error():
-    with pytest.raises(DatahubError, match="more than one existing reading for 2026-01-31"):
+    with pytest.raises(ReadingPlanError, match="more than one existing reading for 2026-01-31"):
         plan_readings(
             [_month(2026, 1, 100.0)],
             [_reading("2026-01-31", 100.0, _id="r1"), _reading("2026-01-31", 150.0, _id="r2")]
@@ -228,7 +229,7 @@ def test_duplicate_existing_readings_for_same_date_is_an_error():
 
 
 def test_replace_without_reading_id_is_an_error():
-    with pytest.raises(DatahubError, match="has no id to replace"):
+    with pytest.raises(ReadingPlanError, match="has no id to replace"):
         plan_readings([_month(2026, 1, 100.0)], [_reading("2026-01-31", 150.0, _id=None)])
 
 

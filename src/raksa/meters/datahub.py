@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from raksa.meters.estateapp import reading_date_to_iso
-
 HELSINKI = ZoneInfo("Europe/Helsinki")
 UTC = datetime.timezone.utc
+
+DATAHUB_METER_LABEL = "Sähkö yhteinen ({meter_id})"
 
 RESOLUTIONS = {
     "PT15M": datetime.timedelta(minutes=15),
@@ -97,58 +97,3 @@ def read_export(file_path: Path) -> ExportSummary:
             incomplete.append(f"{key[0]}-{key[1]:02d}")
 
     return ExportSummary(gsrn=points.pop(), months=months, incomplete=incomplete)
-
-
-VALUE_TOLERANCE = 0.005
-
-
-class PlannedReading(BaseModel):
-    reading_date: str
-    value: float
-    action: str
-    existing_value: float | None = None
-    existing_id: str | None = None
-
-
-def plan_readings(
-    months: list[MonthlyConsumption],
-    existing: list[dict],
-) -> list[PlannedReading]:
-    """Decide per month whether to insert, skip or replace an EstateApp reading."""
-    by_date: dict[str, dict] = {}
-    for reading in existing:
-        iso = reading_date_to_iso(reading.get("readingDate"))
-        if iso is None:
-            raise DatahubError(f"existing reading has an unusable readingDate: {reading.get('readingDate')!r}")
-        if iso in by_date:
-            raise DatahubError(f"more than one existing reading for {iso}")
-        by_date[iso] = reading
-
-    planned = []
-    for month in months:
-        current = by_date.get(month.reading_date)
-        if current is None:
-            planned.append(
-                PlannedReading(
-                    reading_date=month.reading_date,
-                    value=month.consumption_kwh,
-                    action="insert",
-                )
-            )
-            continue
-
-        existing_value = float(current["value"])
-        same = abs(existing_value - month.consumption_kwh) < VALUE_TOLERANCE
-        existing_id = str(current.get("_id")) if current.get("_id") else None
-        if not same and existing_id is None:
-            raise DatahubError(f"existing reading for {month.reading_date} has no id to replace")
-        planned.append(
-            PlannedReading(
-                reading_date=month.reading_date,
-                value=month.consumption_kwh,
-                action="skip" if same else "replace",
-                existing_value=existing_value,
-                existing_id=None if same else existing_id,
-            )
-        )
-    return planned

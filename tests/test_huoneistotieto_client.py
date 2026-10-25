@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -75,6 +76,22 @@ def test_upload_files(client, mock_transport, tmp_path):
     assert "userId=123456" in str(request.url)
     assert "folderId=69d893ef3d28bf7d88304557" in str(request.url)
     assert request.headers["authorization"] == "Bearer test-jwt"
+
+
+def test_list_purchase_invoices(client, mock_transport):
+    rows = [{"yhtio": 174, "erapaiva": "18.03.2026", "maksunsaaja": "Tampereen Energia Oy",
+             "summa": 3836.5, "liitteet": ["101315_1.pdf"]}]
+    documents = [
+        {"_id": "a", "type": "OSTOLASKUT", "file": {"fileId": "a", "json": json.dumps(rows)}},
+        {"_id": "b", "type": "TALOUSARVIOVERTAILU", "file": {"fileId": "b", "fileName": "taloussuun.html"}},
+        {"_id": "c", "type": "TOSITEPAAKIRJA", "file": {"fileId": "c", "json": json.dumps([{"tili": 990}])}},
+    ]
+    _mock_response(mock_transport, json_data={"result": json.dumps(documents)})
+
+    assert client.list_purchase_invoices(2026) == rows
+    request = mock_transport.handle_request.call_args[0][0]
+    assert request.url.path == "/api/services/app/Asiakirja/GetAccountingDocuments"
+    assert dict(request.url.params) == {"officeId": "131", "condominiumId": "206", "year": "2026"}
 
 
 def test_create_folder_error(client, mock_transport):
