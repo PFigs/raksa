@@ -464,6 +464,35 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
     return {label: sorted(dates.values(), key=lambda r: r.period_end) for label, dates in sorted(by_label.items())}
 
 
+def _shift_day(iso_date: str, days: int) -> str:
+    return (datetime.date.fromisoformat(iso_date) + datetime.timedelta(days=days)).isoformat()
+
+
+def _check_bill_gaps(client: EstateAppClient, condo_id: str, meters: dict[str, list[BillReading]]) -> None:
+    """Fail when the bills of a meter family leave days without a reading, as a scanned bill does."""
+    # The family is the label without the meter ID, so a meter change keeps one series.
+    families: dict[str, list[BillReading]] = {}
+    for label, readings in meters.items():
+        families.setdefault(label.rsplit(" (", 1)[0], []).extend(readings)
+    gaps = []
+    for family, readings in sorted(families.items()):
+        readings.sort(key=lambda r: r.period_start)
+        day_before = _shift_day(readings[0].period_start, -1)
+        prefix = f"{label_to_key(family)}_("
+        stored = get_consumptions(client, condo_id, start_date=day_before, end_date=day_before, category=readings[0].utility)
+        if not any(r.get("specification", "").startswith(prefix) for r in stored):
+            gaps.append(f"{family}: no reading on {day_before}, the day before the first bill")
+        # A balancing period spans several estimates, so compare with the latest end so far.
+        latest_end = readings[0].period_end
+        for reading in readings[1:]:
+            if reading.period_start > _shift_day(latest_end, 1):
+                gaps.append(f"{family}: no bill from {_shift_day(latest_end, 1)} to {_shift_day(reading.period_start, -1)}")
+            latest_end = max(latest_end, reading.period_end)
+    if gaps:
+        typer.echo("Error: the bills leave a gap. A bill may be a scan to enter by hand.\n  " + "\n  ".join(gaps), err=True)
+        raise typer.Exit(1)
+
+
 def _correct_balancing_readings(
     client: EstateAppClient, condo_id: str, meters: dict[str, list[BillReading]]
 ) -> dict[str, list[BillReading]]:
@@ -539,6 +568,7 @@ def sync_bills(
         return
 
     client = _get_client()
+    _check_bill_gaps(client, cid, meters)
     meters = _correct_balancing_readings(client, cid, meters)
     inserts: dict[str, list[PlannedReading]] = {}
     skipped = 0

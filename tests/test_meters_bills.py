@@ -13,6 +13,12 @@ FIXTURES = Path(__file__).parent / "fixtures" / "bills"
 runner = CliRunner()
 
 
+@pytest.fixture
+def without_gap_check(monkeypatch):
+    # These tests serve bills that leave gaps on purpose.
+    monkeypatch.setattr(meters_cmd, "_check_bill_gaps", lambda *_args: None)
+
+
 def _reading(
     label: str, utility: str, meter_id: str, start: str, end: str, consumption: float, unit: str, balancing: bool = False
 ) -> dict:
@@ -101,7 +107,7 @@ class _FakeHuoneistotieto:
         return self.attachments[file_name]
 
 
-def test_plan_readings_never_replaces(monkeypatch):
+def test_plan_readings_never_replaces(monkeypatch, without_gap_check):
     stored = [
         {"_id": "heat-1", "specification": "kaukolämpö_(55306988)", "readingDate": "2026-03-31", "value": 24.30},
         {"specification": "sähkö_yhteinen_(643007572070390203)", "readingDate": "2026-08-31", "value": 1190.5},
@@ -132,7 +138,7 @@ def test_plan_readings_never_replaces(monkeypatch):
     assert "EstateApp has 24.300, bill has 24.330" in result.output
 
 
-def test_sync_bills_fails_when_estateapp_stores_another_value(monkeypatch):
+def test_sync_bills_fails_when_estateapp_stores_another_value(monkeypatch, without_gap_check):
     stored = []
 
     def _submit_readings(_client, _cid, readings):
@@ -176,7 +182,7 @@ class _FakeBalancingHuoneistotieto(_FakeHuoneistotieto):
         ([4000.0], None),
     ],
 )
-def test_sync_bills_corrects_a_balancing_bill(monkeypatch, stored_estimates, expected_correction):
+def test_sync_bills_corrects_a_balancing_bill(monkeypatch, without_gap_check, stored_estimates, expected_correction):
     stored = [
         {"_id": f"{key}-{i}", "specification": key, "readingDate": "2024-03-31", "value": value}
         for key in ("vesi_(14667678)", "jätevesi_(14667678)")
@@ -226,7 +232,7 @@ def test_parse_bill_skips_a_heat_balancing_bill():
     assert parse_bill(page) == []
 
 
-def test_sync_bills_counts_an_earlier_balancing_bill_of_the_same_run(monkeypatch):
+def test_sync_bills_counts_an_earlier_balancing_bill_of_the_same_run(monkeypatch, without_gap_check):
     balancing = (FIXTURES / "water_balancing.html").read_bytes()
     stored = []
     submit_calls = []
@@ -266,3 +272,49 @@ def test_sync_bills_counts_an_earlier_balancing_bill_of_the_same_run(monkeypatch
     assert rerun.exit_code == 0, rerun.output
     assert submit_calls == []
     assert "EstateApp has" not in rerun.output
+
+
+_HEAT = (FIXTURES / "heat.html").read_bytes()
+_BALANCING = (FIXTURES / "water_balancing.html").read_bytes()
+_ESTIMATE = (FIXTURES / "water_estimate.html").read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("bills", "stored", "missing"),
+    [
+        # March and May heat bills leave April without a reading.
+        (
+            [_HEAT, _HEAT.replace(b"1.3.2026 - 31.3.2026", b"1.5.2026 - 31.5.2026")],
+            [("kaukolämpö_(55306988)", "2026-02-28")],
+            "Kaukolämpö: no bill from 2026-04-01 to 2026-04-30",
+        ),
+        # The first heat bill starts on 2026-03-01, and EstateApp holds nothing for 2026-02-28.
+        ([_HEAT], [], "Kaukolämpö: no reading on 2026-02-28"),
+        # The water meter changes, and the balancing period spans an estimate of the old meter: no gap.
+        (
+            [_BALANCING, _ESTIMATE, _ESTIMATE.replace(b"06245559", b"14667678").replace(b"2026", b"2025")],
+            [("vesi_(14667678)", "2023-12-31"), ("jätevesi_(14667678)", "2023-12-31")],
+            None,
+        ),
+    ],
+)
+def test_sync_bills_fails_on_a_gap(monkeypatch, bills, stored, missing):
+    class _Bills(_FakeHuoneistotieto):
+        attachments = {f"{i}_1.html": ("text/html", bill) for i, bill in enumerate(bills)}
+
+    readings = [{"_id": key, "specification": key, "readingDate": date, "value": 1.0} for key, date in stored]
+    monkeypatch.setattr(meters_cmd, "_get_bills_client", _Bills)
+    monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
+    monkeypatch.setattr(
+        meters_cmd, "get_consumptions", lambda _c, _i, start_date, end_date, category="electricity": [
+            r for r in readings if start_date <= r["readingDate"] <= end_date
+        ]
+    )
+
+    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1"])
+
+    if missing is None:
+        assert result.exit_code == 0, result.output
+    else:
+        assert result.exit_code == 1
+        assert missing in result.output
