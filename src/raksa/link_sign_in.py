@@ -12,7 +12,7 @@ class LinkSignInError(Exception):
     pass
 
 
-def _huoneistotieto_token(login: HuoneistotietoLogin, http: httpx.Client) -> str:
+def huoneistotieto_token(login: HuoneistotietoLogin, http: httpx.Client) -> str:
     response = http.post(
         f"{HT_BASE_URL}/api/TokenAuth/Authenticate",
         json={
@@ -61,7 +61,7 @@ def sign_in_through_huoneistotieto(
 ) -> str:
     """Log in to Huoneistotieto, ask it for an EstateApp sign-in link, and exchange the link for a login token."""
     http = http_client or httpx.Client(timeout=60.0)
-    ht_token = _huoneistotieto_token(login=login, http=http)
+    ht_token = huoneistotieto_token(login=login, http=http)
     link = urlparse(_estateapp_link(login=login, ht_token=ht_token, http=http))
     prefix = "/link-sign-in/"
     if not link.path.startswith(prefix):

@@ -5,18 +5,24 @@ from collections import Counter
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 from dotenv import find_dotenv, load_dotenv
 
 from raksa.client import EstateAppClient
 from raksa.config import resolve_token, resolve_condo_id, resolve_base_url, resolve_ht_login, RaksaConfigError
-from raksa.link_sign_in import LinkSignInError, sign_in_through_huoneistotieto
-from raksa.meters.datahub import DatahubError, plan_readings, read_export
+from raksa.huoneistotieto.client import HuoneistotietoClient
+from raksa.link_sign_in import LinkSignInError, huoneistotieto_token, sign_in_through_huoneistotieto
+from raksa.meters.bills import BillParseError, BillReading, parse_bill
+from raksa.meters.datahub import DATAHUB_METER_LABEL, DatahubError, read_export
 from raksa.meters.estateapp import (
+    PlannedReading,
+    ReadingPlanError,
     ensure_meters_exist,
     get_consumption_summary,
     get_consumptions,
     label_to_key,
+    plan_readings,
     reading_date_to_iso,
     replace_reading,
     submit_readings,
@@ -32,7 +38,7 @@ ZAPTEC_USERNAME_ENV = "RAKSA_ZAPTEC_USERNAME"
 ZAPTEC_PASSWORD_ENV = "RAKSA_ZAPTEC_PASSWORD"
 ZAPTEC_INSTALLATION_ID_ENV = "RAKSA_ZAPTEC_INSTALLATION_ID"
 ZAPTEC_LOOKBACK_DAYS_ENV = "RAKSA_ZAPTEC_SYNC_LOOKBACK_DAYS"
-DATAHUB_METER_LABEL = "Sähkö yhteinen ({gsrn})"
+HT_CONDOMINIUM_NUMBER_ENV = "RAKSA_HT_CONDOMINIUM_NUMBER"
 
 
 def _get_client() -> EstateAppClient:
@@ -171,6 +177,10 @@ def _datahub_existing_readings(client: EstateAppClient, condo_id: str, key: str,
     ]
 
 
+def _datahub_pairs(export) -> list[tuple[str, float]]:
+    return [(month.reading_date, month.consumption_kwh) for month in export.months]
+
+
 def _write_sync_csv(csv_path: Path, sessions: list[ZaptecSession]):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="") as f:
@@ -303,13 +313,13 @@ def import_datahub(
         typer.echo("No complete months in export.")
         return
 
-    label = DATAHUB_METER_LABEL.format(gsrn=export.gsrn)
+    label = DATAHUB_METER_LABEL.format(meter_id=export.gsrn)
     key = label_to_key(label)
     client = _get_client()
 
     try:
-        planned = plan_readings(export.months, _datahub_existing_readings(client, cid, key, export))
-    except DatahubError as e:
+        planned = plan_readings(_datahub_pairs(export), _datahub_existing_readings(client, cid, key, export))
+    except ReadingPlanError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
@@ -366,10 +376,10 @@ def import_datahub(
     try:
         unresolved = [
             entry
-            for entry in plan_readings(export.months, _datahub_existing_readings(client, cid, key, export))
+            for entry in plan_readings(_datahub_pairs(export), _datahub_existing_readings(client, cid, key, export))
             if entry.action != "skip"
         ]
-    except DatahubError as e:
+    except ReadingPlanError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     if unresolved:
@@ -380,6 +390,168 @@ def import_datahub(
         )
         raise typer.Exit(1)
     typer.echo(f"Verified {len(export.months)} month(s) in EstateApp.")
+
+
+def _get_bills_client() -> HuoneistotietoClient:
+    try:
+        login = resolve_ht_login()
+    except RaksaConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    condominium_number = os.environ.get(HT_CONDOMINIUM_NUMBER_ENV)
+    if not login or not condominium_number:
+        typer.echo(f"Error: set RAKSA_HT_EMAIL, RAKSA_HT_PASSWORD and {HT_CONDOMINIUM_NUMBER_ENV}", err=True)
+        raise typer.Exit(1)
+    http = httpx.Client(timeout=120.0)
+    try:
+        token = huoneistotieto_token(login=login, http=http)
+    except LinkSignInError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    return HuoneistotietoClient(
+        token=token,
+        # The bill calls do not use the user ID.
+        user_id="",
+        office_id=login.office_id,
+        condominium_id=login.condominium_id,
+        condominium_number=condominium_number,
+        http_client=http,
+    )
+
+
+def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]:
+    """Read the bills of this year and the year before. Returns label -> readings, one per reading date."""
+    this_year = datetime.date.today().year
+    payees = {
+        file_name: row.get("maksunsaaja", "")
+        for year in (this_year - 1, this_year)
+        for row in ht_client.list_purchase_invoices(year)
+        for file_name in row.get("liitteet") or []
+    }
+    by_label: dict[str, dict[str, BillReading]] = {}
+    for file_name, payee in payees.items():
+        content_type, content = ht_client.download_invoice_file(file_name)
+        if content_type != "text/html":
+            typer.echo(f"Warning: skipping {file_name} ({payee}): {content_type} is not read")
+            continue
+        try:
+            readings = parse_bill(content.decode("utf-8", errors="replace"))
+        except BillParseError as e:
+            typer.echo(f"Error: {file_name} ({payee}): {e}", err=True)
+            raise typer.Exit(1)
+        if not readings:
+            typer.echo(f"Warning: no reading in {file_name} ({payee})")
+        for reading in readings:
+            dates = by_label.setdefault(reading.label, {})
+            known = dates.get(reading.period_end)
+            if known and known.consumption != reading.consumption:
+                typer.echo(
+                    f"Error: two bills give {reading.label} on {reading.period_end}: "
+                    f"{known.consumption} and {reading.consumption}",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            dates[reading.period_end] = reading
+    return {label: sorted(dates.values(), key=lambda r: r.period_end) for label, dates in sorted(by_label.items())}
+
+
+def _plan_bill_readings(client: EstateAppClient, condo_id: str, readings: list[BillReading]) -> list[PlannedReading]:
+    """Plan one meter's bill readings. The reading date is the last day of the billing period."""
+    key = label_to_key(readings[0].label)
+    existing = [
+        reading
+        for reading in get_consumptions(
+            client,
+            condo_id,
+            start_date=readings[0].period_end,
+            end_date=readings[-1].period_end,
+            category=readings[0].utility,
+        )
+        if reading.get("specification") == key
+    ]
+    try:
+        return plan_readings([(r.period_end, r.consumption) for r in readings], existing)
+    except ReadingPlanError as e:
+        typer.echo(f"Error: {readings[0].label}: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("sync-bills")
+def sync_bills(
+    condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
+    submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
+):
+    """Import heat, electricity and water readings from the utility bills on Huoneistotieto."""
+    cid = _get_condo_id(condo_id)
+    meters = _read_bills(_get_bills_client())
+    if not meters:
+        typer.echo("No readings found in the bills.")
+        return
+
+    client = _get_client()
+    inserts: dict[str, list[PlannedReading]] = {}
+    skipped = 0
+    for label, readings in meters.items():
+        typer.echo(f"\n{label} -> {label_to_key(label)}\n")
+        # A date that already holds a reading is never replaced, only reported when the value differs.
+        for entry in _plan_bill_readings(client, cid, readings):
+            detail = ""
+            if entry.action == "replace":
+                detail = f"  (EstateApp has {entry.existing_value:.3f}, bill has {entry.value:.3f})"
+            action = "insert" if entry.action == "insert" else "skip"
+            typer.echo(f"  {entry.reading_date}  {entry.value:>10.3f} {readings[0].unit}  {action}{detail}")
+            if action == "insert":
+                inserts.setdefault(label, []).append(entry)
+            else:
+                skipped += 1
+    insert_count = sum(len(entries) for entries in inserts.values())
+    typer.echo(f"\n{insert_count} insert, {skipped} skip")
+
+    if not submit:
+        typer.echo("\nDry-run mode. Pass --submit to actually import.")
+        return
+
+    if not inserts:
+        typer.echo("Nothing to submit.")
+        return
+
+    refused = 0
+    for label, entries in inserts.items():
+        utility = meters[label][0].utility
+        key = label_to_key(label)
+        ensure_meters_exist(client, cid, [label], category=utility)
+        # EstateApp refuses a later submit for a meter and date, so each meter goes in one call.
+        result = submit_readings(
+            client,
+            cid,
+            [
+                {
+                    "category": utility,
+                    "specification": key,
+                    "readingDate": entry.reading_date,
+                    "value": entry.value,
+                    "type": "usual",
+                }
+                for entry in entries
+            ],
+        )
+        refused += int(result.get("refused", 0))
+        typer.echo(f"  {label}: inserted={result.get('inserted', 0)}, refused={result.get('refused', 0)}")
+
+    if refused:
+        typer.echo("Error: some readings were refused by EstateApp.", err=True)
+        raise typer.Exit(1)
+
+    missing = [
+        f"{label} {entry.reading_date}"
+        for label in inserts
+        for entry in _plan_bill_readings(client, cid, meters[label])
+        if entry.action == "insert"
+    ]
+    if missing:
+        typer.echo(f"Error: {len(missing)} reading(s) not stored as expected: {', '.join(missing)}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Verified {insert_count} reading(s) in EstateApp.")
 
 
 @app.command("import-zaptec")
