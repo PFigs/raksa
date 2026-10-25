@@ -218,3 +218,51 @@ def test_sync_bills_corrects_a_balancing_bill(monkeypatch, stored_estimates, exp
     assert rerun.exit_code == 0, rerun.output
     assert submit_calls == []
     assert "EstateApp has" not in rerun.output
+
+
+def test_parse_bill_skips_a_heat_balancing_bill():
+    page = (FIXTURES / "heat.html").read_text(encoding="utf-8").replace("KULUTUSLASKU", "TASAUSLASKU")
+
+    assert parse_bill(page) == []
+
+
+def test_sync_bills_counts_an_earlier_balancing_bill_of_the_same_run(monkeypatch):
+    balancing = (FIXTURES / "water_balancing.html").read_bytes()
+    stored = []
+    submit_calls = []
+
+    class _TwoBalancingBills(_FakeHuoneistotieto):
+        # 2024-01-01 to 2025-06-30 used 1000 m3, and 2024-01-01 to 2026-02-26 used 3630 m3.
+        attachments = {
+            "1_1.html": ("text/html", balancing.replace(b"26.02.2026", b"30.06.2025").replace(b"3630,00", b"1000,00")),
+            "2_1.html": ("text/html", balancing),
+        }
+
+    def _submit_readings(_client, _cid, readings):
+        submit_calls.append(readings)
+        stored.extend({"specification": r["specification"], "readingDate": r["readingDate"], "value": r["value"]}
+                      for r in readings)
+        return {"inserted": len(readings), "refused": 0}
+
+    monkeypatch.setattr(meters_cmd, "_get_bills_client", _TwoBalancingBills)
+    monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
+    monkeypatch.setattr(
+        meters_cmd, "get_consumptions", lambda _c, _i, start_date, end_date, category="electricity": [
+            r for r in stored if start_date <= r["readingDate"] <= end_date
+        ]
+    )
+    monkeypatch.setattr(meters_cmd, "ensure_meters_exist", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(meters_cmd, "submit_readings", _submit_readings)
+
+    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted([(r["specification"], r["readingDate"], r["value"]) for r in readings] for readings in submit_calls) == [
+        [("jätevesi_(14667678)", "2025-06-30", 1000.0), ("jätevesi_(14667678)", "2026-02-26", 2630.0)],
+        [("vesi_(14667678)", "2025-06-30", 1000.0), ("vesi_(14667678)", "2026-02-26", 2630.0)],
+    ]
+    submit_calls.clear()
+    rerun = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", "--submit"])
+    assert rerun.exit_code == 0, rerun.output
+    assert submit_calls == []
+    assert "EstateApp has" not in rerun.output

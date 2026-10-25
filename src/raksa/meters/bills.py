@@ -65,6 +65,9 @@ def parse_bill(page: str) -> list[BillReading]:
     if balancing:
         # The other quantity rows of a balancing bill split the period by price.
         quantities = {_quantity(lines[i + 1]) for i, line in enumerate(lines[:-1]) if line == "Kulutus:"}
+        # Only the water balancing bill carries a meter reading; the others stay skipped.
+        if not any(quantity and quantity[1] == "m3" for quantity in quantities):
+            return []
     else:
         quantities = {quantity for line in lines[index + 1:] if (quantity := _quantity(line))}
     if len(quantities) != 1 or None in quantities:

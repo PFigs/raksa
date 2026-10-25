@@ -484,8 +484,12 @@ def _correct_balancing_readings(
                 if r.get("specification") == key
             ]
             stored_dates = {date for date, _ in stored}
-            # The estimates that this run inserts count as well.
-            planned = [(r.period_end, r.consumption) for r in readings if not r.balancing and r.period_end not in stored_dates]
+            # The estimates and the earlier corrections that this run inserts count as well.
+            planned = [
+                (r.period_end, r.consumption)
+                for r in [r for r in readings if not r.balancing] + [r for r in result if r.balancing]
+                if r.period_end not in stored_dates
+            ]
             counted = sum(value for date, value in stored + planned if reading.period_start <= date < reading.period_end)
             correction = round(reading.consumption - counted, 3)
             if correction < 0:
