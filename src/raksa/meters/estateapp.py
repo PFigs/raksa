@@ -37,7 +37,7 @@ def get_meter_definitions(client: EstateAppClient, condo_id: str) -> list[dict]:
         condominiumById(condominiumId: $condominiumId) {
             propertyDetails {
                 consumptionMeters {
-                    key label category multiplier
+                    _id key label category multiplier
                 }
             }
         }
@@ -134,8 +134,11 @@ def submit_readings(
     """Submit consumption readings.
 
     Each reading should have: category, specification (meter key), readingDate, value, type.
+    EstateApp also needs the meter ID of each reading, which is looked up from the key.
     Returns {'inserted': int, 'refused': int}.
     """
+    meter_ids = {meter["key"]: meter["_id"] for meter in get_meter_definitions(client, condo_id)}
+    readings = [dict(reading, meterId=meter_ids[reading["specification"]]) for reading in readings]
     data = client._gql("""
     mutation editConsumptionMonitoring($condominiumId: ID!, $consumptionInput: [ConsumptionMonitoringInput!]!) {
         editConsumptionMonitoring(condominiumId: $condominiumId, consumptionInput: $consumptionInput) {
