@@ -1,8 +1,11 @@
-"""Read heat, electricity and water consumption from the HTML e-invoices on Huoneistotieto."""
+"""Read heat, electricity and water consumption from utility bills: HTML e-invoices and PDF bills."""
 import datetime
 import html
+import io
+import logging
 import re
 
+import pypdf
 from pydantic import BaseModel
 
 from raksa.meters.datahub import DATAHUB_METER_LABEL
@@ -16,6 +19,19 @@ UTILITIES = {
     "MWh": ("heat", "Mittarin numero:", ["Kaukolämpö ({meter_id})"]),
     "m3": ("water", "Mittarin numero:", ["Vesi ({meter_id})", "Jätevesi ({meter_id})"]),
 }
+
+
+# The PDF bills that sync-bills reads, by supplier: the patterns of the meter ID and of the consumption with its unit.
+# A supplier without patterns sends readings in PDFs that no pattern reads yet.
+PDF_SUPPLIERS: dict[str, tuple[str, str] | None] = {
+    "Tampereen Energia Oy": (r"Mittarin numero: (\d+)", r"Laskutettu määrä: (\d[\d ]*,\d+) (MWh)"),
+    "Tampereen Energia Sähköverkko Oy": (r"Käyttöpaikka (\d{18})", r"KULUTUSLASKU \S+ - \S+ \( (\d[\d ]*,\d+) (kWh) \)"),
+    "Tampereen Vesi Oy": None,
+}
+PDF_PERIOD = r"(?:KULUTUSLASKU|ARVIOLASKU) (\d{1,2}\.\d{1,2}\.\d{4}) - (\d{1,2}\.\d{1,2}\.\d{4})"
+
+# pypdf warns about every font it cannot fully decode; the text it reads is still complete.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 
 class BillParseError(Exception):
@@ -73,13 +89,23 @@ def parse_bill(page: str) -> list[BillReading]:
     if len(quantities) != 1 or None in quantities:
         raise BillParseError(f"expected one consumption after '{period[0]}', found {sorted(quantities, key=str)}")
     consumption, unit = quantities.pop()
-    utility, meter_line, labels = UTILITIES[unit]
+    meter_line = UTILITIES[unit][1]
 
     meter_ids = {lines[i + 1] for i, line in enumerate(lines[:-1]) if line == meter_line}
     if len(meter_ids) != 1:
         raise BillParseError(f"expected one value after '{meter_line}', found {sorted(meter_ids)}")
-    meter_id = meter_ids.pop()
+    return _readings(
+        meter_id=meter_ids.pop(),
+        start=start,
+        end=end,
+        consumption=consumption,
+        unit=unit,
+        balancing=balancing,
+    )
 
+
+def _readings(meter_id: str, start: str, end: str, consumption: float, unit: str, balancing: bool) -> list[BillReading]:
+    utility, _, labels = UTILITIES[unit]
     return [
         BillReading(
             label=label.format(meter_id=meter_id),
@@ -93,3 +119,35 @@ def parse_bill(page: str) -> list[BillReading]:
         )
         for label in labels
     ]
+
+
+def pdf_text(content: bytes) -> str:
+    return " ".join(page.extract_text() for page in pypdf.PdfReader(io.BytesIO(content)).pages)
+
+
+def _one_match(pattern: str, text: str, what: str):
+    matches = set(re.findall(pattern, text))
+    if len(matches) != 1:
+        raise BillParseError(f"expected one {what}, found {sorted(matches)}")
+    return matches.pop()
+
+
+def parse_pdf_bill(supplier: str, text: str) -> list[BillReading]:
+    """Return the readings of the PDF bill of a utility supplier, and none for any other supplier."""
+    if supplier not in PDF_SUPPLIERS:
+        return []
+    patterns = PDF_SUPPLIERS[supplier]
+    if patterns is None:
+        raise BillParseError(f"no reader for the PDF bills of {supplier}: add its patterns to PDF_SUPPLIERS")
+    meter_pattern, consumption_pattern = patterns
+    text = re.sub(r"\s+", " ", text)
+    start, end = _one_match(PDF_PERIOD, text, "billing period")
+    consumption, unit = _one_match(consumption_pattern, text, "consumption")
+    return _readings(
+        meter_id=_one_match(meter_pattern, text, "meter ID"),
+        start=start,
+        end=end,
+        consumption=float(consumption.replace(" ", "").replace(",", ".")),
+        unit=unit,
+        balancing=False,
+    )

@@ -16,13 +16,15 @@ src/raksa/
     renovations.py  - raksa renovations {list,get,import}
     faults.py       - raksa faults {list,get,import}
     meters.py       - raksa meters {import-zaptec,summary}
+  avaa/
+    client.py       - Avaa (app.avaa.io) client: sign-in, purchase invoices and their attachments
   premis/
     cases.py        - Read premis case exports (renovation + fault YAMLs)
     invoices.py     - Read premis invoice exports (PDF + YAML metadata)
   meters/
     zaptec.py       - Read Zaptec EV charger Excel exports
     datahub.py      - Read Fingrid Datahub consumption exports (CSV)
-    bills.py        - Read utility consumption from Huoneistotieto e-invoices (HTML)
+    bills.py        - Read utility consumption from e-invoices (HTML, Huoneistotieto) and PDF bills (Avaa)
     estateapp.py    - EstateApp consumption meter API operations
 ```
 
@@ -38,7 +40,7 @@ raksa faults get <fault-id>                   # show fault details
 raksa faults import <dir> [--submit]          # import from hive YAML (dry-run default)
 raksa meters import-zaptec <path> [--submit]  # import EV consumption from Zaptec Excel
 raksa meters import-datahub <csv> [--submit]   # import monthly electricity from a Datahub export
-raksa meters sync-bills [--submit]            # import heat, electricity and water from Huoneistotieto bills
+raksa meters sync-bills [--submit]            # import heat, electricity and water from Huoneistotieto and Avaa bills
 raksa meters summary                          # show consumption totals
 ```
 

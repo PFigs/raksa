@@ -6,11 +6,30 @@ from typer.testing import CliRunner
 
 from raksa.cli import app
 from raksa.commands import meters as meters_cmd
-from raksa.meters.bills import BillParseError, parse_bill
+from raksa.meters.bills import BillParseError, parse_bill, parse_pdf_bill
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bills"
 
 runner = CliRunner()
+
+
+class _FakeAvaa:
+    """Serves the text fixtures of PDF bills as Avaa purchase invoices."""
+
+    bills: dict[str, bytes] = {}
+
+    def list_purchase_invoices(self) -> list[dict]:
+        return [{"invoice_id": index, "supplier": supplier} for index, supplier in enumerate(self.bills)]
+
+    def download_attachments(self, invoice_id: int) -> list[tuple[str, bytes]]:
+        return [("application/pdf", list(self.bills.values())[invoice_id])]
+
+
+@pytest.fixture(autouse=True)
+def avaa(monkeypatch):
+    monkeypatch.setattr(meters_cmd, "_get_avaa_client", _FakeAvaa)
+    # The fixtures hold the text of the PDFs, not the PDFs.
+    monkeypatch.setattr(meters_cmd, "pdf_text", lambda content: content.decode("utf-8"))
 
 
 @pytest.fixture
@@ -78,6 +97,43 @@ def test_parse_bill(fixture, expected):
     assert [reading.model_dump() for reading in readings] == expected
 
 
+@pytest.mark.parametrize(
+    ("supplier", "fixture", "expected"),
+    [
+        (
+            "Tampereen Energia Oy",
+            "heat.pdf.txt",
+            [_reading("Kaukolämpö (55306988)", "heat", "55306988", "2026-10-01", "2026-10-31", 16.97, "MWh")],
+        ),
+        (
+            "Tampereen Energia Sähköverkko Oy",
+            "grid.pdf.txt",
+            [
+                _reading(
+                    "Sähkö yhteinen (643007572070390203)",
+                    "electricity",
+                    "643007572070390203",
+                    "2026-10-01",
+                    "2026-10-31",
+                    1263.457,
+                    "kWh",
+                )
+            ],
+        ),
+        ("Fortum Asiakaspalvelu Oy", "grid.pdf.txt", []),
+    ],
+)
+def test_parse_pdf_bill(supplier, fixture, expected):
+    readings = parse_pdf_bill(supplier=supplier, text=(FIXTURES / fixture).read_text(encoding="utf-8"))
+
+    assert [reading.model_dump() for reading in readings] == expected
+
+
+def test_parse_pdf_bill_fails_on_a_water_bill():
+    with pytest.raises(BillParseError, match="Tampereen Vesi Oy"):
+        parse_pdf_bill(supplier="Tampereen Vesi Oy", text="ARVIOLASKU 1.10.2026 - 31.12.2026")
+
+
 def test_parse_bill_rejects_a_split_bill():
     page = (FIXTURES / "heat.html").read_text(encoding="utf-8") + "<p>KULUTUSLASKU 16.3.2026 - 31.3.2026</p>"
 
@@ -136,6 +192,32 @@ def test_plan_readings_never_replaces(monkeypatch, without_gap_check):
     ]
     assert "EstateApp has 1190.500, bill has 1201.720" in result.output
     assert "EstateApp has 24.300, bill has 24.330" in result.output
+
+
+def test_sync_bills_reads_avaa(monkeypatch, without_gap_check):
+    class _NoHuoneistotietoBills(_FakeHuoneistotieto):
+        attachments = {}
+
+    class _AvaaBills(_FakeAvaa):
+        bills = {
+            "Tampereen Energia Oy": (FIXTURES / "heat.pdf.txt").read_bytes(),
+            "Lännen Kiinteistöpalvelu Oy": b"not a utility bill",
+        }
+
+    stored = []
+    monkeypatch.setattr(meters_cmd, "_get_bills_client", _NoHuoneistotietoBills)
+    monkeypatch.setattr(meters_cmd, "_get_avaa_client", _AvaaBills)
+    monkeypatch.setattr(meters_cmd, "_get_client", lambda: object())
+    monkeypatch.setattr(meters_cmd, "get_consumptions", lambda *_args, **_kwargs: list(stored))
+    monkeypatch.setattr(meters_cmd, "ensure_meters_exist", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(meters_cmd, "submit_readings", lambda _c, _i, rs: stored.extend(rs) or {"refused": 0})
+
+    result = runner.invoke(app, ["meters", "sync-bills", "--condo-id", "condo-1", "--submit"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r["specification"], r["readingDate"], r["value"]) for r in stored] == [
+        ("kaukolämpö_(55306988)", "2026-10-31", 16.97)
+    ]
 
 
 def test_sync_bills_fails_when_estateapp_stores_another_value(monkeypatch, without_gap_check):

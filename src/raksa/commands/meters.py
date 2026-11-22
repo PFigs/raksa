@@ -9,6 +9,7 @@ import httpx
 import typer
 from dotenv import find_dotenv, load_dotenv
 
+from raksa.avaa.client import AvaaClient, AvaaError
 from raksa.client import EstateAppClient
 from raksa.config import (
     HT_CONDOMINIUM_NUMBER_ENV,
@@ -20,7 +21,7 @@ from raksa.config import (
 )
 from raksa.huoneistotieto.client import HuoneistotietoClient
 from raksa.link_sign_in import LinkSignInError, huoneistotieto_token, sign_in_through_huoneistotieto
-from raksa.meters.bills import BillParseError, BillReading, parse_bill
+from raksa.meters.bills import PDF_SUPPLIERS, BillParseError, BillReading, parse_bill, parse_pdf_bill, pdf_text
 from raksa.meters.datahub import DATAHUB_METER_LABEL, DatahubError, read_export
 from raksa.meters.estateapp import (
     PlannedReading,
@@ -45,6 +46,8 @@ ZAPTEC_USERNAME_ENV = "RAKSA_ZAPTEC_USERNAME"
 ZAPTEC_PASSWORD_ENV = "RAKSA_ZAPTEC_PASSWORD"
 ZAPTEC_INSTALLATION_ID_ENV = "RAKSA_ZAPTEC_INSTALLATION_ID"
 ZAPTEC_LOOKBACK_DAYS_ENV = "RAKSA_ZAPTEC_SYNC_LOOKBACK_DAYS"
+AVAA_EMAIL_ENV = "RAKSA_AVAA_EMAIL"
+AVAA_PASSWORD_ENV = "RAKSA_AVAA_PASSWORD"
 
 
 def _get_client() -> EstateAppClient:
@@ -425,8 +428,22 @@ def _get_bills_client() -> HuoneistotietoClient:
     )
 
 
-def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]:
-    """Read the bills of this year and the year before. Returns label -> readings, one per reading date."""
+def _get_avaa_client() -> AvaaClient:
+    load_dotenv(dotenv_path=find_dotenv(usecwd=True))
+    email = os.environ.get(AVAA_EMAIL_ENV)
+    password = os.environ.get(AVAA_PASSWORD_ENV)
+    if not email or not password:
+        typer.echo(f"Error: set {AVAA_EMAIL_ENV} and {AVAA_PASSWORD_ENV}", err=True)
+        raise typer.Exit(1)
+    try:
+        return AvaaClient.sign_in(email=email, password=password)
+    except AvaaError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+def _huoneistotieto_bill_readings(ht_client: HuoneistotietoClient) -> list[BillReading]:
+    """Read the HTML bills of this year and the year before from Huoneistotieto."""
     this_year = datetime.date.today().year
     payees = {
         file_name: row.get("maksunsaaja", "")
@@ -434,7 +451,7 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
         for row in ht_client.list_purchase_invoices(year)
         for file_name in row.get("liitteet") or []
     }
-    by_label: dict[str, dict[str, BillReading]] = {}
+    readings: list[BillReading] = []
     not_html = 0
     no_reading = 0
     for file_name, payee in payees.items():
@@ -443,24 +460,48 @@ def _read_bills(ht_client: HuoneistotietoClient) -> dict[str, list[BillReading]]
             not_html += 1
             continue
         try:
-            readings = parse_bill(content.decode("utf-8", errors="replace"))
+            bill_readings = parse_bill(content.decode("utf-8", errors="replace"))
         except BillParseError as e:
             typer.echo(f"Error: {file_name} ({payee}): {e}", err=True)
             raise typer.Exit(1)
-        if not readings:
+        if not bill_readings:
             no_reading += 1
-        for reading in readings:
-            dates = by_label.setdefault(reading.label, {})
-            known = dates.get(reading.period_end)
-            if known and known.consumption != reading.consumption:
-                typer.echo(
-                    f"Error: two bills give {reading.label} on {reading.period_end}: "
-                    f"{known.consumption} and {reading.consumption}",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            dates[reading.period_end] = reading
+        readings.extend(bill_readings)
     typer.echo(f"Read {len(payees)} attachment(s): skipped {not_html} that are not HTML, {no_reading} bill(s) give no reading.")
+    return readings
+
+
+def _avaa_bill_readings(avaa_client: AvaaClient) -> list[BillReading]:
+    """Read the PDF bills of the utility suppliers from Avaa."""
+    bills = [invoice for invoice in avaa_client.list_purchase_invoices() if invoice["supplier"] in PDF_SUPPLIERS]
+    readings: list[BillReading] = []
+    for invoice in bills:
+        for content_type, content in avaa_client.download_attachments(invoice["invoice_id"]):
+            if content_type != "application/pdf":
+                continue
+            try:
+                readings.extend(parse_pdf_bill(supplier=invoice["supplier"], text=pdf_text(content)))
+            except BillParseError as e:
+                typer.echo(f"Error: Avaa invoice {invoice['invoice_id']} ({invoice['supplier']}): {e}", err=True)
+                raise typer.Exit(1)
+    typer.echo(f"Read {len(bills)} utility bill(s) from Avaa.")
+    return readings
+
+
+def _group_bill_readings(readings: list[BillReading]) -> dict[str, list[BillReading]]:
+    """Group the readings of all bills. Returns label -> readings, one per reading date."""
+    by_label: dict[str, dict[str, BillReading]] = {}
+    for reading in readings:
+        dates = by_label.setdefault(reading.label, {})
+        known = dates.get(reading.period_end)
+        if known and known.consumption != reading.consumption:
+            typer.echo(
+                f"Error: two bills give {reading.label} on {reading.period_end}: "
+                f"{known.consumption} and {reading.consumption}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        dates[reading.period_end] = reading
     return {label: sorted(dates.values(), key=lambda r: r.period_end) for label, dates in sorted(by_label.items())}
 
 
@@ -560,9 +601,9 @@ def sync_bills(
     condo_id: Annotated[str | None, typer.Option("--condo-id", help="Condominium ID")] = None,
     submit: Annotated[bool, typer.Option("--submit", help="Actually submit (default is dry-run)")] = False,
 ):
-    """Import heat, electricity and water readings from the utility bills on Huoneistotieto."""
+    """Import heat, electricity and water readings from the utility bills on Huoneistotieto and Avaa."""
     cid = _get_condo_id(condo_id)
-    meters = _read_bills(_get_bills_client())
+    meters = _group_bill_readings(_huoneistotieto_bill_readings(_get_bills_client()) + _avaa_bill_readings(_get_avaa_client()))
     if not meters:
         typer.echo("No readings found in the bills.")
         return
