@@ -41,8 +41,9 @@
 - **Avaa has no public API.** The client uses the endpoints of the Avaa web page. It needs the `X-XSRF-TOKEN` header
   from the `XSRF-TOKEN` cookie, or the API answers 401. A change on the Avaa side fails the run and sends the email.
 - **A supplier changes its PDF layout.** The pattern then matches nothing and the run fails.
-- Rollout: add the secrets `RAKSA_AVAA_EMAIL` and `RAKSA_AVAA_PASSWORD` to apollo-office, merge raksa, then merge the
-  workflow change. A dry run against the live services inserts the October heat and grid readings.
+- Rollout: add the secrets `RAKSA_AVAA_EMAIL` and `RAKSA_AVAA_PASSWORD` to apollo-office, merge the workflow change,
+  then merge raksa. The daily run checks out raksa `main`, so a raksa merge before the workflow change fails the run.
+  The current raksa ignores the new variables. A run after the merge inserts the October heat and grid readings.
 
 ## Tasks
 
